@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Review threads on the commits of a git repository.
 
 A thread is a discussion about some lines of one file, either in one commit
