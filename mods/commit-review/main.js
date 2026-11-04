@@ -50,6 +50,8 @@ const VIEWS = "changes-views", WORK = "changes-work", COMMITTED = "changes-commi
 // A thread card in the diff shows its last few comments, each cut to a few
 // lines, so its height stays bounded; the comment card shows the whole thread.
 const CARD_COMMENTS = 3, CARD_LINES = 5, CARD_QUOTE = 3;
+// A commit's message card shows this many wrapped lines until it is clicked.
+const MESSAGE_LINES = 8;
 // The fixed parts of a thread card's height, px: its margins, padding and
 // border; one small text line; the gap between its children.
 const CARD_FRAME = 24, SMALL_LINE = 15, CARD_GAP = 4;
@@ -168,7 +170,7 @@ export default class Review extends View {
     this.commits = []; this.extra = []; this.emptyTree = null;
     this.mode = "branch"; this.selected = null; this.lastClicked = null; this.showCommits = false;
     this.units = []; this.threads = []; this.viewed = {}; this.seen = null; this.watched = null;
-    this.open = null; this.closed = false; this.choosing = null; this.agentList = null;
+    this.open = null; this.closed = false; this.choosing = null; this.agentList = null; this.expanded = new Set();
     this.lines = null; this.linesPath = null; this.rows = []; this.index = new Map(); this.items = []; this.sizes = []; this.diffWidth = 0; this.gutter = 30;
     this.composer = null; this.note?.set_value(""); this.noteText = "";
   }
@@ -250,6 +252,7 @@ export default class Review extends View {
       : [...extra, ...commits].filter((c) => selected.includes(c.sha)).map((c) => ({
         key: c.sha, commit: c, target: { kind: "commit", commit: c.sha, subject: c.subject },
         from: c.parents[0] ?? emptyTree, to: c.sha, label: `${c.short} ${c.subject}`, match: { commits: [c.sha], changes: [c.change] },
+        message: { short: c.short, author: c.author, time: c.time, text: c.body ? `${c.subject}\n\n${c.body}` : c.subject },
       }));
     const lists = await Promise.all(units.map((u) => u.to === null ? uncommittedOf(git, u.from) : filesOf(git, u.from, u.to)));
     units.forEach((u, i) => { u.files = lists[i].files; u.limited = lists[i].limited; });
@@ -309,7 +312,7 @@ export default class Review extends View {
     const found = this.repo && this.fileOf(this.open);
     const value = found ? {
       repo: { root: this.repo.root, on: this.on, id: this.repo.id },
-      unit: { key: found.unit.key, target: found.unit.target, from: found.unit.from, to: found.unit.to, label: found.unit.label, match: found.unit.match, files: [found.file] },
+      unit: { key: found.unit.key, target: found.unit.target, from: found.unit.from, to: found.unit.to, label: found.unit.label, match: found.unit.match, message: found.unit.message, files: [found.file] },
       path: found.file.path,
     } : { path: null };
     const text = JSON.stringify(value);
@@ -427,12 +430,14 @@ export default class Review extends View {
     });
   }
 
-  // The list's items: the threads that have no place in the diff first, then
-  // the diff rows, each placed thread under its last line.
+  // The list's items: a commit's message, the threads that have no place in
+  // the diff, then the diff rows, each placed thread under its last line.
   rebuild() {
     this.items = [];
     const found = this.fileOf(this.open);
     if (!found) { this.sizes = []; return; }
+    const message = found.unit.message, key = found.unit.key;
+    if (message) this.items.push({ key: `m:${key}`, kind: "message", unit: key, message, height: this.messageHeight(message, this.expanded.has(key)) });
     const under = new Map(), top = [];
     for (const t of this.threadsOn(found.unit, found.file.path)) {
       const at = place(t, this.rows), unplaced = !at && t.line !== null && t.line !== undefined;
@@ -458,6 +463,19 @@ export default class Review extends View {
     if (hidden) h += CARD_GAP + SMALL_LINE;
     for (const c of shown) h += CARD_GAP + SMALL_LINE + clip(c.text, this.cpl(), CARD_LINES).lines * this.lineHeight();
     return h;
+  }
+
+  messageHeight(message, open) {
+    return CARD_FRAME + SMALL_LINE + CARD_GAP + clip(message.text, this.cpl(), open ? Infinity : MESSAGE_LINES).lines * this.lineHeight();
+  }
+
+  // A click on a long message shows all of it, or cuts it again; the choice
+  // holds for the commit's other files.
+  toggleMessage(unitKey, cx) {
+    if (this.expanded.has(unitKey)) this.expanded.delete(unitKey);
+    else this.expanded.add(unitKey);
+    this.rebuild();
+    cx.notify();
   }
 
   // The composer's lines in the current diff, or null.
@@ -891,7 +909,19 @@ export default class Review extends View {
           .child(div().text_size(this.fontSize).whitespace_normal().text_color(t.foreground).child(clip(c.text, cpl, CARD_LINES).text)))));
   }
 
+  // The commit's whole message above its diff, cut to MESSAGE_LINES until clicked.
+  messageCard(it, t) {
+    const m = it.message, open = this.expanded.has(it.unit), cpl = this.cpl();
+    const all = clip(m.text, cpl, Infinity).lines, long = all > MESSAGE_LINES;
+    const hint = !long ? "" : open ? " · click to show less" : ` · ${plural(all - MESSAGE_LINES, "more line")} · click to show all`;
+    return div().w_full().h(it.height).flex_none().pl(42).pr(12).py(4).when(long, (e) => e.cursor_pointer())
+      .child(v_flex().max_w((this.size?.width ?? 368) - 60).h_full().overflow_hidden().rounded(8).border_1().border_color(t.border).px(10).py(6).gap(CARD_GAP).bg(t.surface)
+        .child(div().h(SMALL_LINE).flex_none().truncate().text_size(10).text_color(t.dim).child(`commit ${m.short} · ${m.author} · ${ago(m.time)}${hint}`))
+        .child(div().text_size(this.fontSize).whitespace_normal().text_color(t.foreground).child(clip(m.text, cpl, open ? Infinity : MESSAGE_LINES).text)));
+  }
+
   item(it, t, colors, target, marked) {
+    if (it.kind === "message") return this.messageCard(it, t);
     if (it.kind === "thread") return this.threadCard(it, t);
     const row = this.rows[it.i], i = it.i, on = target && i >= target.from && i <= target.to;
     if (row.kind === "@") {
@@ -1003,7 +1033,11 @@ export default class Review extends View {
         .child(div().id("review-diff-x").size_full().overflow_x_scrollbar()
           .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("review-diff", this.items.length, this.sizes.length ? this.sizes : this.row, (i) => this.items[i].key,
             (range) => this.items.slice(range.start, range.end).map((it) => this.item(it, t, colors, target, marked))).size_full().track_scroll(this.scroll)
-            .on_item_click((k, cx) => { if (k.startsWith("t:")) this.openThread(k.slice(2), cx); else this.clickRow(Number(k.slice(2)), cx); }))))
+            .on_item_click((k, cx) => {
+              if (k.startsWith("m:")) this.toggleMessage(k.slice(2), cx);
+              else if (k.startsWith("t:")) this.openThread(k.slice(2), cx);
+              else this.clickRow(Number(k.slice(2)), cx);
+            }))))
         .child(Scrollbar.vertical("review-diff").viewport_from_layout().absolute().inset_0())
         .when(!this.open && Boolean(empty), (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child(empty)))
         .when(Boolean(this.open) && this.rows.length > 0 && !this.composer, (e) => e.child(div().absolute().bottom(6).right(14).px(8).py(3).rounded(6).bg(t.raised + "e0").text_size(10).text_color(t.dim).child("Click a line to comment · click a thread to answer it"))))

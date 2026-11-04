@@ -48,7 +48,10 @@ Top to bottom, in one rounded card on the theme's `background`:
    the last line they are about, indented 42px, with a header ("lines 40–44 ·
    open · click to open"), up to three comments (author, "agent" for agents,
    age, "pending"), each cut to five lines. Rows under a thread keep a faint
-   accent mark in their left border.
+   accent mark in their left border. In Commits mode the list starts with the
+   commit's message card, built like a thread card: a header ("commit 3f2a1c9 ·
+   author · age") and the whole message, subject and body, cut to eight wrapped
+   lines with "N more lines · click to show all" when it is longer.
 6. **Comment card**, 340px, floating over the top right of the diff (a strip
    under it when the panel is narrower than 600px): a new comment's box, or a
    whole thread with its lines, every comment, a reply box and Resolve / Reopen
@@ -76,6 +79,8 @@ here" while there is none.
   its lines; once the text is sent, the comments are submitted.
 - A click on a thread card opens the thread in the card. The person's pending
   comments can be edited or deleted; submitted ones cannot.
+- A click on a long commit message shows all of it, and another cuts it again;
+  the choice holds for that commit's other files.
 - Ticking Viewed on the open file opens the next file not viewed yet.
 - A tick stores the file's blobs before and after; the file reads "changed"
   once they differ. A branch's ticks are kept per branch, a commit's under its
@@ -108,8 +113,9 @@ here" while there is none.
 - `mods/commit-review/main.js`: the panel, the switch strip and the entry of
   the dialog. `git.js`: git reads (`rev-parse`, `for-each-ref`, `merge-base`,
   `log -z --raw --no-abbrev --no-renames --diff-merges=first-parent` for the
-  commits and their files, `diff --raw --numstat -z --no-abbrev`, `diff` of one
-  file; for Uncommitted mode `status --porcelain=v1 -z --untracked-files=all`,
+  commits, their messages and their files,
+  `diff --raw --numstat -z --no-abbrev`, `diff` of one file; for Uncommitted
+  mode `status --porcelain=v1 -z --untracked-files=all`,
   `diff <HEAD> --raw --numstat`, `hash-object`, and `diff --no-index /dev/null`
   for an untracked file), each
   with `--no-optional-locks -c core.fsmonitor=false -c diff.autoRefreshIndex=false`.
@@ -131,7 +137,8 @@ here" while there is none.
 - A virtual list row can hold no handler and no input, so thread cards open
   through the list's `on_item_click`, and the comment card floats outside it.
 - Card heights are computed before drawing (comments cut to five wrapped lines,
-  the last three comments): keep that estimate and the drawing in step.
+  the last three comments; a commit message cut to eight until clicked): keep
+  that estimate and the drawing in step.
 - A thread is placed where its first quoted line still is, nearest its line
   number; when that text is gone it is listed at the top as "not in this diff"
   instead of being guessed onto other code.
@@ -157,6 +164,9 @@ here" while there is none.
   Submit review sends it, and then `herdr-review list` does.
 - `herdr-review comment --commit HEAD --path <a changed file> --line <a changed line> -- "x"`
   makes a card appear under that line, with a notification.
+- In Commits mode a commit's file opens under the commit's whole message; a
+  message longer than eight lines shows all of them after a click, in the panel
+  and in the reader.
 - In Commits mode, ticking some of a commit's files shows "k/n" on its row, and
   all of them a check. After `git commit --amend` changes a viewed file, the
   row reads "changed", the other files stay viewed, and the commit's threads

@@ -61,8 +61,9 @@ function parseLog(stdout) {
   for (let i = 0; i < parts.length; i++) {
     const token = parts[i].replace(/^\n/, "");
     if (token.startsWith(RECORD)) {
-      const [sha, short, subject, author, email, time, parents] = token.slice(1).split(SEP);
-      commits.push({ sha, short, subject, author, time: Number(time), parents: parents ? parents.split(" ") : [], change: `${email} ${time} ${subject}`, files: [] });
+      // The body comes last and is free text, so it is everything after the parents.
+      const fields = token.slice(1).split(SEP), [sha, short, subject, author, email, time, parents] = fields;
+      commits.push({ sha, short, subject, body: fields.slice(7).join(SEP).trim(), author, time: Number(time), parents: parents ? parents.split(" ") : [], change: `${email} ${time} ${subject}`, files: [] });
     } else if (token.startsWith(":") && commits.length) {
       const [, , oldBlob, newBlob, status] = token.slice(1).split(" ");
       commits[commits.length - 1].files.push({ path: parts[++i], status: status[0], oldBlob, newBlob });
@@ -72,7 +73,7 @@ function parseLog(stdout) {
 }
 // Each commit's files are its diff to its first parent, as filesOf reads it.
 const LOG = ["log", "-z", "--raw", "--no-abbrev", "--no-renames", "--diff-merges=first-parent",
-  `--format=${RECORD}%H${SEP}%h${SEP}%s${SEP}%an${SEP}%ae${SEP}%at${SEP}%P`];
+  `--format=${RECORD}%H${SEP}%h${SEP}%s${SEP}%an${SEP}%ae${SEP}%at${SEP}%P${SEP}%b`];
 
 /** A branch's tip, its merge base with the base (null when it is the base or
  *  has nothing of its own), and its commits, newest first. */
