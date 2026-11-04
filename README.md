@@ -30,6 +30,11 @@ review comments of their own, all with one small command.
   open file's diff in a pane beside the terminal, with more room to read. It
   has the same threads and comment card, and follows the file you pick in the
   panel.
+- **More context.** Rows above, between and below the hunks show the unchanged
+  lines git leaves out: ↑ shows 20 more lines above a hunk, ↓ 20 more below
+  it, and a run of 20 lines or fewer opens in one click, joining the hunks
+  around it. Revealed lines take comments like any other line, and a thread on
+  one of them sits under it once it is shown.
 - **Threads.** Click a line (click another to widen the range, or click a hunk
   header for the whole hunk) to comment; the speech bubble on a file row
   comments on the whole file. Your comments stay pending until **Submit
@@ -153,6 +158,7 @@ outside the repository and makes no network request.
 
 ```sh
 bash herdr-review/test.sh "$(command -v herdr-review)"   # needs git and jq
+node --test test/diff.test.js                            # needs git and Node.js (tested with 24)
 herdr-app check mods/commit-review
 ```
 

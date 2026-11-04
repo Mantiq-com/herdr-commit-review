@@ -36,9 +36,9 @@ import { spaces, panes, focused, theme, settings, nextCommand, props, shared, se
 import { languageOf } from "./highlight.js";
 import { palette } from "./palette.js";
 import { SendDialog } from "./dialog.js";
-import { gitIn, repoOf, branchesOf, baseOf, commitsOf, commitsByHash, emptyTreeOf, headOf, filesOf, uncommittedOf, diffOf } from "./git.js";
+import { gitIn, repoOf, branchesOf, baseOf, commitsOf, commitsByHash, emptyTreeOf, headOf, filesOf, uncommittedOf, diffOf, oldLinesOf } from "./git.js";
 import { loadThreads, loadViewed, addThread, reply, resolve, reopen, editComment, deleteComment, publish, setViewed, unsetViewed } from "./store.js";
-import { diffRows, anchorOf, place } from "./diff.js";
+import { diffRows, anchorOf, place, expand, revealOf, addRange, MORE_LINES } from "./diff.js";
 import { reviewText, reviewTask, whereOf } from "./agent.js";
 
 const VIEW = "commit-review.view", REQUEST = "commit-review.request", SENT = "commit-review.sent", FOLLOW = "commit-review.follow";
@@ -173,6 +173,7 @@ export default class Review extends View {
     this.units = []; this.threads = []; this.viewed = {}; this.seen = null; this.watched = null;
     this.open = null; this.closed = false; this.choosing = null; this.agentList = null; this.expanded = new Set();
     this.lines = null; this.linesPath = null; this.rows = []; this.index = new Map(); this.items = []; this.sizes = []; this.diffWidth = 0; this.gutter = 30;
+    this.raw = null; this.gaps = []; this.oldText = null; this.revealed = new Map();
     this.composer = null; this.note?.set_value(""); this.noteText = "";
   }
 
@@ -399,10 +400,46 @@ export default class Review extends View {
     catch (e) { lines = [`Cannot show this diff: ${e?.message ?? e}`]; }
     // git counts no lines of an untracked file: its diff does, as in Herdr's Changes panel.
     if (found.file.untracked) found.file.add = lines.filter((l) => l[0] === "+").length;
-    if (this.contextKey() === context && this.open === open) this.setLines(lines, found.file.path);
+    let old = null;
+    try { old = await this.oldOf(found.file); }
+    catch (e) { this.note_ = `Cannot show the lines around the changes: ${e?.message ?? e}`; }
+    if (this.contextKey() === context && this.open === open) this.setLines(lines, found.file.path, old);
   }
 
-  setLines(lines, path) {
+  // The open file's old lines, kept by blob so that the timer's reloads do not read them again.
+  async oldOf(file) {
+    if (this.oldText?.blob === file.oldBlob) return this.oldText.lines;
+    const lines = await oldLinesOf(this.git, file);
+    if (lines) this.oldText = { blob: file.oldBlob, lines };
+    return lines;
+  }
+
+  // `old`: the file's lines before the change, which the person can reveal around the hunks.
+  setLines(lines, path, old = null) {
+    this.raw = { lines, path, old };
+    this.showRows();
+  }
+
+  // The lines the person revealed in the open file, while its old side is the one they were revealed in.
+  rangesOf() {
+    const found = this.fileOf(this.open), r = found && this.revealed.get(`${this.open.unit}\0${this.open.path}`);
+    return r && r.blob === found.file.oldBlob ? r.ranges : [];
+  }
+
+  // A click on an expander row shows more of the unchanged lines around the hunks.
+  reveal(key, cx) {
+    const gap = this.gaps.find((g) => g.key === key), found = this.fileOf(this.open);
+    if (!gap || !found) return;
+    this.revealed.set(`${this.open.unit}\0${this.open.path}`, { blob: found.file.oldBlob, ranges: addRange(this.rangesOf(), revealOf(gap)) });
+    this.showRows();
+    this.rebuild();
+    cx.notify();
+  }
+
+  // The rows: git's hunks with the lines revealed around them.
+  showRows() {
+    const { path, old } = this.raw, shown = expand(this.raw.lines, old, this.rangesOf()), lines = shown.lines;
+    this.gaps = shown.gaps;
     const same = this.lines && this.linesPath === path && lines.length === this.lines.length && lines.every((l, i) => l === this.lines[i]);
     if (same) return;
     this.lines = lines; this.linesPath = path;
@@ -457,10 +494,15 @@ export default class Review extends View {
       else top.push(it);
     }
     this.items.push(...top);
+    // An expander row sits where its hidden lines are: before row `at`, after the thread cards of the row above.
+    const gapsAt = new Map();
+    for (const g of this.gaps) (gapsAt.get(g.at) ?? gapsAt.set(g.at, []).get(g.at)).push({ key: g.key, kind: "gap", gap: g, height: this.row });
     this.rows.forEach((_r, i) => {
+      for (const it of gapsAt.get(i) ?? []) this.items.push(it);
       this.items.push({ key: `r:${i}`, kind: "row", i, height: this.row });
       for (const it of under.get(i) ?? []) this.items.push(it);
     });
+    for (const it of gapsAt.get(this.rows.length) ?? []) this.items.push(it);
     this.sizes = this.items.map((it) => it.height);
   }
 
@@ -932,9 +974,21 @@ export default class Review extends View {
         .child(div().text_size(this.fontSize).line_height(`${this.lineHeight()}px`).whitespace_normal().text_color(t.foreground).child(clip(m.text, cpl, open ? Infinity : MESSAGE_LINES).text)));
   }
 
+  // An expander row, drawn like a hunk header: ↓ shows the lines below the
+  // hunk above, ↑ those above the hunk below, and a short run opens whole.
+  gapRow(it, t) {
+    const g = it.gap, hidden = g.to - g.from + 1;
+    const sign = g.dir === "down" ? "↓" : g.dir === "up" ? "↑" : g.above && g.below ? "↕" : g.below ? "↑" : "↓";
+    const label = g.dir === "all" ? `Show ${plural(hidden, "hidden line")}` : `Show ${MORE_LINES} more lines${g.first ? ` · ${hidden} hidden` : ""}`;
+    return h_flex().w_full().h(this.row).flex_none().items_center().cursor_pointer().bg(t.raised).border_l(2).border_color(NONE).text_color(t.dim)
+      .child(div().w(this.gutter + 16).flex_none().text_center().child(sign))
+      .child(div().flex_1().min_w(0).truncate().child(label));
+  }
+
   item(it, t, colors, target, marked) {
     if (it.kind === "message") return this.messageCard(it, t);
     if (it.kind === "thread") return this.threadCard(it, t);
+    if (it.kind === "gap") return this.gapRow(it, t);
     const row = this.rows[it.i], i = it.i, on = target && i >= target.from && i <= target.to;
     if (row.kind === "@") {
       return h_flex().w_full().h(this.row).flex_none().items_center().cursor_pointer().bg(t.raised).border_l(2).border_color(on ? t.accent : NONE)
@@ -1048,6 +1102,7 @@ export default class Review extends View {
             .on_item_click((k, cx) => {
               if (k.startsWith("m:")) this.toggleMessage(k.slice(2), cx);
               else if (k.startsWith("t:")) this.openThread(k.slice(2), cx);
+              else if (k.startsWith("x:")) this.reveal(k, cx);
               else this.clickRow(Number(k.slice(2)), cx);
             }))))
         .child(Scrollbar.vertical("review-diff").viewport_from_layout().absolute().inset_0())

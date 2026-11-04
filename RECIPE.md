@@ -53,6 +53,11 @@ Top to bottom, in one rounded card on the theme's `background`:
    author · age") and the whole message, subject and body, cut to eight wrapped
    lines with "N more lines · click to show all" when it is longer. With no
    file open, the list holds the message card of every selected commit.
+   Expander rows, drawn like hunk headers with an arrow in the gutter, stand
+   where unchanged lines are hidden: before the first hunk "↑ Show 20 more
+   lines · N hidden"; between two hunks a ↓ row (the lines under the hunk
+   above) and a ↑ row (the lines over the hunk below); after the last hunk a
+   ↓ row. A run of 20 lines or fewer gets one row, "Show N hidden lines".
 6. **Comment card**, 340px, floating over the top right of the diff (a strip
    under it when the panel is narrower than 600px): a new comment's box, or a
    whole thread with its lines, every comment, a reply box and Resolve / Reopen
@@ -83,6 +88,15 @@ there are none.
   comments can be edited or deleted; submitted ones cannot.
 - A click on a long commit message shows all of it, and another cuts it again;
   the choice holds for that commit's other files.
+- A click on an expander row shows 20 more of the hidden lines next to the hunk
+  it points at, or the whole run when it is short; two hunks with nothing
+  hidden between them become one. The lines come from the file's old blob,
+  since unchanged lines are the same on both sides. What was revealed is kept
+  per file as old line numbers, together with that blob: it survives the
+  reloads and edits to the working tree, and is dropped when the old side
+  changes. The panel and the reader keep their own. A revealed line takes a
+  comment, and a thread on an unchanged line moves from "not in this diff" to
+  under its line once that line is shown.
 - Ticking Viewed on the open file opens the next file not viewed yet.
 - Picking a commit (its tick box in Commits mode, or a row of Branch mode's
   list) opens that commit's first file, so its message shows at once, in the
@@ -123,10 +137,12 @@ there are none.
   `diff --raw --numstat -z --no-abbrev`, `diff` of one file; for Uncommitted
   mode `status --porcelain=v1 -z --untracked-files=all`,
   `diff <HEAD> --raw --numstat`, `hash-object`, and `diff --no-index /dev/null`
-  for an untracked file), each
+  for an untracked file; `cat-file blob <old blob>` for the lines around the
+  hunks), each
   with `--no-optional-locks -c core.fsmonitor=false -c diff.autoRefreshIndex=false`.
   `store.js`: every thread read and write goes through `exec("herdr-review", …,
-  { cwd, on })`. `diff.js`: diff rows and thread placement. `highlight.js` and
+  { cwd, on })`. `diff.js`: diff rows, the revealed lines around the hunks
+  (`expand`), and thread placement. `highlight.js` and
   `palette.js`: the tokenizer and its colors. `agent.js`: the review message and
   the reviewer's task. `dialog.js`: the send dialog.
 - `herdr` functions: `spaces`, `panes`, `focused`, `layout`, `theme`,
@@ -142,6 +158,12 @@ there are none.
 
 - A virtual list row can hold no handler and no input, so thread cards open
   through the list's `on_item_click`, and the comment card floats outside it.
+  For the same reason each expand direction is a row of its own: one row
+  cannot hold two buttons.
+- Revealed lines are spliced into git's diff as context lines (`expand` in
+  `diff.js`), so the rows, the thread placement and the comment card see an
+  ordinary diff. With nothing revealed, the result is git's own lines. A diff
+  cut at the line limit offers nothing after its last hunk.
 - Card heights are computed before drawing (comments cut to five wrapped lines,
   the last three comments; a commit message cut to eight until clicked): keep
   that estimate and the drawing in step. The card text is drawn with the line
@@ -164,6 +186,10 @@ there are none.
 - `herdr-app check mods/commit-review` passes.
 - `bash herdr-review/test.sh "$(command -v herdr-review)"` passes, and fails
   when the lock in `herdr-review.py` is removed.
+- `node --test test/diff.test.js` passes.
+- In a modified file with hunks far apart, ↑ and ↓ show 20 more lines with
+  both line numbers right, a short run opens whole and joins its hunks, and a
+  comment on a revealed line is listed by `herdr-review list` with that line.
 - In a repository on a branch with commits, Branch mode lists them and the
   files; ticking a file dims it, and after a new commit to that file the row
   reads "changed".

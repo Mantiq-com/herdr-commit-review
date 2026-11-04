@@ -178,6 +178,7 @@ export async function uncommittedOf(git, head) {
 }
 
 const DIFF = ["--no-ext-diff", "--no-textconv", "--no-color"];
+const cut = (line) => line.length > MAX_LINE ? `${line.slice(0, MAX_LINE)}… (line truncated)` : line;
 
 /** One file's diff between two commits, or from a commit to the working tree
  *  (`to` null, where an untracked file is compared to nothing): the lines
@@ -191,5 +192,16 @@ export async function diffOf(git, from, to, file) {
   if (r.code !== 0 && !(file.untracked && r.code === 1)) throw new Error(`git diff: ${(r.stderr || r.stdout).trim()}`);
   const all = r.stdout.replace(/\n$/, "").split("\n"), first = all.findIndex((l) => l.startsWith("@@"));
   const lines = first < 0 ? [file.binary ? "Binary file changed" : "No text diff available"] : all.slice(first);
-  return lines.slice(0, MAX_LINES).map((line) => line.length > MAX_LINE ? `${line.slice(0, MAX_LINE)}… (line truncated)` : line);
+  return lines.slice(0, MAX_LINES).map(cut);
+}
+
+/** A modified file's lines before the change, read from its old blob. The
+ *  lines the diff hides around its hunks are unchanged, so they are read from
+ *  here. Null for a file whose diff hides none (added, deleted, binary, or a
+ *  submodule). */
+export async function oldLinesOf(git, file) {
+  if (file.status !== "M" || file.binary || file.newMode === "160000") return null;
+  const lines = (await must(git, ["cat-file", "blob", file.oldBlob])).split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines.map(cut);
 }
