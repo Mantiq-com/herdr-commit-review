@@ -1,19 +1,24 @@
 # Commit review for Herdr
 
-A [Herdr](https://herdr.dev) app mod that reviews committed work the way a pull
-request is reviewed, together with your coding agents. Pick a whole branch or
-single commits, tick off each file as you read it, and leave comments on lines.
+A [Herdr](https://herdr.dev) app mod that reviews work the way a pull request
+is reviewed, together with your coding agents. Pick a whole branch, single
+commits or the uncommitted changes, tick off each file as you read it, and
+leave comments on lines.
 Agents read your comments, answer them, mark them resolved, and can leave
 review comments of their own, all with one small command.
 
 ![Commit review](preview.png)
 
-- **Branch or commits.** Branch mode shows everything a branch adds since it
-  left its base branch (from the merge base to the tip). Commits mode lists the
-  branch's commits; tick one or several (shift-click for a range) and each is
-  shown as its own diff. A branch filter picks which branch.
+- **Branch, commits or uncommitted.** Branch mode shows everything a branch
+  adds since it left its base branch (from the merge base to the tip). Commits
+  mode lists the branch's commits; tick one or several (shift-click for a range)
+  and each is shown as its own diff. A branch filter picks which branch.
+  Uncommitted mode shows the working tree against HEAD, new files included. Its
+  threads belong to that worktree, and still show in Branch mode once the work
+  is committed.
 - **Viewed ticks.** Every file has a Viewed box. A file you ticked shows
-  "changed" again when a later commit changes it, as on GitHub.
+  "changed" again when a later commit changes it, as on GitHub, or in
+  Uncommitted mode when it is edited again.
 - **Commit progress.** Each commit in the list shows how far its review got,
   from its files' ticks: `2/5` while it is in review, a green check once every
   file is viewed. An amended or rebased commit keeps its ticks and threads (it
@@ -68,12 +73,13 @@ review comments of their own, all with one small command.
      herdr-app do pane.split '{"direction":"right","mod":"commit-review"}'
      ```
 
-   - **As the Committed half of the Changes panel.** Clone Herdr's layout
+   - **As the Review half of the Changes panel.** Clone Herdr's layout
      (`herdr-app do layout.clone '{"name":"main","as":"my-layout"}'`), then in
      `~/.config/herdr-app/layouts/my-layout.json` replace the `changes` block
      with this column. Its top strip switches between Herdr's own Changes panel
-     (Uncommitted) and this panel (Committed). The ids must stay as they are:
-     the strip selects `changes-work` and `changes-commits` in `changes-views`.
+     (Changes, with its Commit box) and this panel (Review). The ids must stay
+     as they are: the strip selects `changes-work` and `changes-commits` in
+     `changes-views`.
 
      ```json
      { "id": "changes", "type": "column", "resizable": false, "children": [
@@ -97,10 +103,13 @@ herdr-review reply k3x9a2 --author Codex -- "Fixed in 3f2a1c9."
 herdr-review resolve k3x9a2
 herdr-review comment --commit 3f2a1c9 --path src/app.rs --line 42 --author Codex -- "This clone is not needed."
 herdr-review comment --branch my-feature --path src/app.rs --line 42 -- "..."
+herdr-review comment --uncommitted --path src/app.rs --line 42 -- "..."
 ```
 
-Line numbers are the file's lines in that commit (or at the branch's tip);
-`--side old` comments on a removed line, numbered as before the change.
+Line numbers are the file's lines in that commit (at the branch's tip, or in
+the working tree for `--uncommitted`); `--side old` comments on a removed line,
+numbered as before the change. `--uncommitted` threads belong to the worktree
+they were written in: `herdr-review list --uncommitted` lists that worktree's.
 `--author` is the name the panel shows; without it a comment is signed
 "agent". A thread on a commit follows it through amend and rebase:
 `herdr-review list --commit` also finds threads written on an earlier version
@@ -131,7 +140,8 @@ outside the repository and makes no network request.
   commit menu can offer "Review commit" this way; to bring the Changes switch to
   this panel as well, run `layout.select {stack: "changes-views", child: "changes-commits"}`.
 - Mod commands for `keys.json`: `commit-review.submit`, `commit-review.next`
-  (the next file not viewed yet) and `commit-review.mode` (Branch or Commits).
+  (the next file not viewed yet) and `commit-review.mode` (the next of Branch,
+  Commits and Uncommitted).
 - Props: `font_size` (px; default: the terminal's font size minus one),
   `base` (the branch reviews compare against; default: origin's HEAD branch,
   else `main`, else `master`) and `reader` (`true`: the reader pane, which

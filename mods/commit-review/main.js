@@ -1,14 +1,13 @@
-// Commit review: committed work reviewed like a pull request, in threads that
-// coding agents read and answer. Branch mode shows everything a branch adds
-// since it left its base (merge base to tip); Commits mode shows each selected
-// commit as its own diff. Every file has a Viewed tick, which clears itself
-// when the file changes again.
+// Commit review: work reviewed like a pull request, in threads that coding
+// agents read and answer. Branch mode shows everything a branch adds since it
+// left its base (merge base to tip); Commits mode shows each selected commit
+// as its own diff; Uncommitted mode shows the working tree against HEAD. Every
+// file has a Viewed tick, which clears itself when the file changes again.
 //
-// The mod is a panel of its own, or the "Committed" half of a Changes panel:
-// a layout column with a switch strip (this mod again, with props
-// { switch: true }) above a stack VIEWS that holds the working-tree changes
-// (WORK, Herdr's Changes panel or another mod) and this panel (COMMITTED).
-// The README shows both layouts.
+// The mod is a panel of its own, or the "Review" half of a Changes panel: a
+// layout column with a switch strip (this mod again, with props
+// { switch: true }) above a stack VIEWS that holds Herdr's Changes panel or
+// another mod (WORK) and this panel (COMMITTED). The README shows both layouts.
 //
 // With props { reader: true } the mod is a reader pane: only the diff of the
 // file the panel has open (shared as FOLLOW), with its threads and comment
@@ -22,7 +21,8 @@
 // within seconds.
 //
 // Mod commands: "commit-review.submit", "commit-review.next" (the next file
-// not viewed yet), "commit-review.mode" (Branch or Commits).
+// not viewed yet), "commit-review.mode" (the next of Branch, Commits and
+// Uncommitted).
 // Props: { font_size: px (default: the terminal's font size minus one),
 //          base: the branch reviews compare against (default: origin/HEAD's
 //          branch, else main, else master) }.
@@ -36,12 +36,13 @@ import { spaces, panes, focused, theme, settings, nextCommand, props, shared, se
 import { languageOf } from "./highlight.js";
 import { palette } from "./palette.js";
 import { SendDialog } from "./dialog.js";
-import { gitIn, repoOf, branchesOf, baseOf, commitsOf, commitsByHash, emptyTreeOf, filesOf, diffOf } from "./git.js";
+import { gitIn, repoOf, branchesOf, baseOf, commitsOf, commitsByHash, emptyTreeOf, headOf, filesOf, uncommittedOf, diffOf } from "./git.js";
 import { loadThreads, loadViewed, addThread, reply, resolve, reopen, editComment, deleteComment, publish, setViewed, unsetViewed } from "./store.js";
 import { diffRows, anchorOf, place } from "./diff.js";
 import { reviewText, reviewTask, whereOf } from "./agent.js";
 
 const VIEW = "commit-review.view", REQUEST = "commit-review.request", SENT = "commit-review.sent", FOLLOW = "commit-review.follow";
+const MODES = ["branch", "commits", "uncommitted"];
 const NONE = "#00000000", ICONS = "mods/commit-review";
 // The ids the switch strip selects in the layout (the README's Changes
 // layout). Another mod that opens this view selects COMMITTED in VIEWS too.
@@ -155,7 +156,7 @@ export default class Review extends View {
         const c = await nextCommand();
         if (c === "submit") this.submit(cx);
         else if (c === "next") this.nextUnviewed(cx);
-        else if (c === "mode") this.setMode(this.mode === "branch" ? "commits" : "branch", cx);
+        else if (c === "mode") this.setMode(this.nextMode(), cx);
         cx.notify();
       }
     });
@@ -238,15 +239,19 @@ export default class Review extends View {
 
     const emptyTree = same && this.emptyTree ? this.emptyTree : await emptyTreeOf(git);
     // `match`: which threads a unit shows (threadsOn). A branch also shows the
-    // threads written on its commits; a commit thread matches by hash, or by
-    // `change` once the commit was amended or rebased.
-    const units = mode === "branch"
+    // threads written on its commits and on its uncommitted work; a commit
+    // thread matches by hash, or by `change` once the commit was amended or
+    // rebased. The uncommitted unit compares the working tree (`to` null) to HEAD.
+    const head = mode === "uncommitted" ? await headOf(git) : null;
+    const units = mode === "uncommitted"
+      ? [{ key: "uncommitted", target: { kind: "uncommitted", worktree: repo.root, branch: current, head }, from: head, to: null, label: "Uncommitted changes", match: { worktree: repo.root, commits: [], changes: [] } }]
+      : mode === "branch"
       ? [{ key: "branch", target: { kind: "branch", branch, base, head: tip }, from: merge, to: tip, label: `${branch} since ${base}`, match: { branch, commits: commits.map((c) => c.sha), changes: commits.map((c) => c.change) } }]
       : [...extra, ...commits].filter((c) => selected.includes(c.sha)).map((c) => ({
         key: c.sha, commit: c, target: { kind: "commit", commit: c.sha, subject: c.subject },
         from: c.parents[0] ?? emptyTree, to: c.sha, label: `${c.short} ${c.subject}`, match: { commits: [c.sha], changes: [c.change] },
       }));
-    const lists = await Promise.all(units.map((u) => filesOf(git, u.from, u.to)));
+    const lists = await Promise.all(units.map((u) => u.to === null ? uncommittedOf(git, u.from) : filesOf(git, u.from, u.to)));
     units.forEach((u, i) => { u.files = lists[i].files; u.limited = lists[i].limited; });
 
     let threads = same ? this.threads : [], viewed = same ? this.viewed : {}, store = null, storeError = null;
@@ -383,6 +388,8 @@ export default class Review extends View {
     let lines;
     try { lines = await diffOf(this.git, found.unit.from, found.unit.to, found.file); }
     catch (e) { lines = [`Cannot show this diff: ${e?.message ?? e}`]; }
+    // git counts no lines of an untracked file: its diff does, as in Herdr's Changes panel.
+    if (found.file.untracked) found.file.add = lines.filter((l) => l[0] === "+").length;
     if (this.contextKey() === context && this.open === open) this.setLines(lines, found.file.path);
   }
 
@@ -415,6 +422,7 @@ export default class Review extends View {
       if (t.path !== path) return false;
       const target = t.target;
       if (target.kind === "commit") return m.commits.includes(target.commit) || m.changes.includes(target.change);
+      if (target.kind === "uncommitted") return target.worktree === m.worktree || (m.branch !== undefined && target.branch === m.branch);
       return target.kind === "branch" && m.branch !== undefined && target.branch === m.branch;
     });
   }
@@ -555,7 +563,11 @@ export default class Review extends View {
     });
   }
 
-  viewKey(unit, f) { return unit.target.kind === "commit" ? commitViewKey(unit.commit, f.path) : `branch:${unit.target.branch}:${f.path}`; }
+  viewKey(unit, f) {
+    const target = unit.target;
+    if (target.kind === "commit") return commitViewKey(unit.commit, f.path);
+    return target.kind === "uncommitted" ? `uncommitted:${target.worktree}:${f.path}` : `branch:${target.branch}:${f.path}`;
+  }
   viewState(unit, f) { return this.stateOf(this.viewKey(unit, f), blobsOf(f)); }
   stateOf(key, blobs) {
     const v = this.viewed[key];
@@ -636,6 +648,12 @@ export default class Review extends View {
     this.refresh(cx); cx.notify();
   }
 
+  // The mode after this one; Branch only when the branch has commits of its own.
+  nextMode() {
+    const modes = MODES.filter((m) => m !== "branch" || this.merge);
+    return modes[(modes.indexOf(this.mode) + 1) % modes.length];
+  }
+
   setMode(mode, cx) {
     if (!this.repo || mode === this.mode) return;
     if (mode === "branch" && !this.merge) { this.note_ = `${this.branch} has no commits of its own since ${this.base ?? "its base"}`; cx.notify(); return; }
@@ -709,7 +727,7 @@ export default class Review extends View {
     if (!f?.space || !this.repo) { this.note_ = "No space is shown"; cx.notify(); return; }
     if (this.mode === "commits" && !commits.length) { this.note_ = "Select the commits to review first"; cx.notify(); return; }
     const task = reviewTask({ root: this.repo.root, on: this.on, mode: this.mode, branch: this.branch, base: this.base, merge: this.merge, commits });
-    const name = this.mode === "branch" ? `Review ${this.branch}` : `Review ${commits.map((c) => c.short).join(" ")}`;
+    const name = this.mode === "branch" ? `Review ${this.branch}` : this.mode === "uncommitted" ? "Review uncommitted" : `Review ${commits.map((c) => c.short).join(" ")}`;
     run("tab.new", { space: f.space, name: name.slice(0, 40), folder: this.repo.root, argv: agent.run, task });
     cx.notify();
   }
@@ -738,7 +756,7 @@ export default class Review extends View {
       .when(!ok, (e) => e.opacity(0.5).tooltip(`${this.branch} has nothing of its own since ${this.base ?? "its base"}`))
       .child(label);
     return h_flex().h(26).p(2).gap(2).items_center().rounded(7).border_1().border_color(t.border).bg(t.raised)
-      .child(pill("branch", "Branch", Boolean(this.merge))).child(pill("commits", "Commits", true));
+      .child(pill("branch", "Branch", Boolean(this.merge))).child(pill("commits", "Commits", true)).child(pill("uncommitted", "Uncommitted", true));
   }
 
   branchPicker(t) {
@@ -764,7 +782,8 @@ export default class Review extends View {
     return Popover.new("agents").open(this.choosing === "agents").on_open_change((open, cx) => this.openAgents(open, cx))
       .trigger(box)
       .content(v_flex().id("agent-list").mt(4).min_w(240).max_h(320).overflow_y_scrollbar().p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover).shadow_md()
-        .child(div().px(8).py(4).text_size(11).text_color(t.dim).child(this.mode === "branch" ? `Review ${this.branch} with…` : `Review ${plural(this.units.length, "commit")} with…`))
+        .child(div().px(8).py(4).text_size(11).text_color(t.dim).child(this.mode === "branch" ? `Review ${this.branch} with…`
+          : this.mode === "uncommitted" ? "Review the uncommitted changes with…" : `Review ${plural(this.units.length, "commit")} with…`))
         .when(list === null, (e) => e.child(div().px(8).py(6).text_size(12).text_color(t.dim).child("Looking for agents…")))
         .when(Array.isArray(list) && !list.length, (e) => e.child(div().px(8).py(6).text_size(12).text_color(t.dim).child("No agent is installed here")))
         .children((list ?? []).map((a) => h_flex().id(`agent-${a.key}`).h(28).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
@@ -773,6 +792,11 @@ export default class Review extends View {
   }
 
   commitStrip(t) {
+    if (this.mode === "uncommitted") {
+      const head = this.units[0]?.target.head;
+      return h_flex().h(28).flex_none().px(12).items_center().border_b(1).border_color(t.border).text_size(11.5).text_color(t.muted)
+        .child(div().min_w(0).truncate().child(`Uncommitted changes on ${this.current ?? "a detached HEAD"}${head ? ` · against HEAD ${head.slice(0, 7)}` : ""}`));
+    }
     const selecting = this.mode === "commits", list = [...this.extra.map((c) => ({ ...c, extra: true })), ...this.commits];
     const count = (this.selected ?? []).length, reviewed = list.filter((c) => this.commitState(c).state === "reviewed").length;
     const link = (id, label, action) => div().id(id).px(6).rounded(4).cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(label);
@@ -843,7 +867,8 @@ export default class Review extends View {
       if (u.limited) rows.push(div().px(8).py(2).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files"));
     }
     const empty = this.error || (this.loading && !this.repo ? "Loading…" : !this.repo ? "No folder"
-      : this.mode === "commits" && !(this.selected ?? []).length ? "Select the commits to review above" : "No changes");
+      : this.mode === "commits" && !(this.selected ?? []).length ? "Select the commits to review above"
+      : this.mode === "uncommitted" ? "No uncommitted changes" : "No changes");
     return v_flex().id("review-files").flex_none().h(Math.min(220, Math.max(40, rows.length * 28 + 12))).overflow_y_scrollbar().p(6).border_b(1).border_color(t.border)
       .children(rows).when(!rows.length, (e) => e.child(div().p(8).text_color(t.dim).child(empty)));
   }
@@ -939,8 +964,9 @@ export default class Review extends View {
           .child(link("card-send", "Send to agent", t.accent, (_e, cx) => this.send([th], `Thread ${th.id}`, cx), "Paste this thread into an agent's terminal, with how to answer it"))));
   }
 
-  // Uncommitted (the working tree's changes) or Committed (this panel). The
-  // layout's stack holds the choice; the copy kept here draws the click at once.
+  // Changes (Herdr's Changes panel, with its Commit box) or Review (this
+  // panel). The layout's stack holds the choice; the copy kept here draws the
+  // click at once.
   renderSwitch() {
     const t = theme(), active = find(layout(), VIEWS)?.active ?? this.shown;
     const pill = (child, label, tip) => div().id(`view-${child}`).h(24).px(10).flex().items_center().rounded(6).text_size(12).cursor_pointer()
@@ -948,8 +974,8 @@ export default class Review extends View {
       .on_click((_e, cx) => { this.shown = child; run("layout.select", { stack: VIEWS, child }); cx.notify(); })
       .child(label);
     return h_flex().id("changes-switch").size_full().px(4).gap(4).items_center().bg(t.background)
-      .child(pill(WORK, "Uncommitted", "The working tree's changes"))
-      .child(pill(COMMITTED, "Committed", "A branch or chosen commits, reviewed in threads that agents answer"));
+      .child(pill(WORK, "Changes", "The working tree's changes, and committing them"))
+      .child(pill(COMMITTED, "Review", "Uncommitted work, a branch or chosen commits, reviewed in threads that agents answer"));
   }
 
   // The reader pane's header: the open file and what it is a diff of.
@@ -1024,8 +1050,9 @@ export default class Review extends View {
     const note = this.storeError ?? this.note_;
     return root
       .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .when(!this.repo, (e) => e.child(div().font_semibold().child("Committed")))
-        .when(Boolean(this.repo), (e) => e.child(this.modeSwitch(t)).child(this.branchPicker(t)))
+        .when(!this.repo, (e) => e.child(div().font_semibold().child("Review")))
+        // Uncommitted work is always the checked-out branch's: no branch to pick.
+        .when(Boolean(this.repo), (e) => e.child(this.modeSwitch(t)).when(this.mode !== "uncommitted", (e) => e.child(this.branchPicker(t))))
         .child(div().flex_1())
         .when(Boolean(this.repo), (e) => e.child(this.agentPicker(t))))
       .when(Boolean(this.repo), (e) => e.child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(11.5)

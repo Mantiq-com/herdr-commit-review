@@ -1,8 +1,8 @@
 # Commit review
 
-A panel that reviews committed work like a pull request: a whole branch, or
-commits picked from it, with a Viewed tick per file and comment threads on
-lines. The person's comments go to a coding agent as one message; agents
+A panel that reviews work like a pull request: a whole branch, commits picked
+from it, or the uncommitted changes, with a Viewed tick per file and comment
+threads on lines. The person's comments go to a coding agent as one message; agents
 answer, resolve and open threads with a small command, `herdr-review`, and the
 panel shows their comments within seconds.
 
@@ -12,11 +12,12 @@ panel shows their comments within seconds.
 
 Top to bottom, in one rounded card on the theme's `background`:
 
-1. **Header**, 42px: a two-pill switch **Branch | Commits** (24px pills in a
-   bordered `raised` box), a branch picker (a select-looking box with the branch
-   name and a chevron; its popover lists local branches, marking "checked out"
-   and "base"), then on the right **Ask agent** (a box with a chevron; its
-   popover lists the installed agents).
+1. **Header**, 42px: a three-pill switch **Branch | Commits | Uncommitted**
+   (24px pills in a bordered `raised` box), a branch picker (a select-looking
+   box with the branch name and a chevron; its popover lists local branches,
+   marking "checked out" and "base"; not in Uncommitted mode, which is always
+   the checked-out branch), then on the right **Ask agent** (a box with a
+   chevron; its popover lists the installed agents).
 2. **Status row**, 30px, 11.5px text: "3/12 viewed" (green when all are
    viewed), `+added` in green and `−removed` in red, and on the right a 22px
    pane button (Lucide's panel-right) while a file is open, then a solid
@@ -31,6 +32,8 @@ Top to bottom, in one rounded card on the theme's `background`:
    dimmed to 50%) when all are, "changed" in `blocked` when a viewed file
    differs since an amend or rebase. Commits not on the branch (from a request)
    carry a "not on <branch>" tag. Branch mode's unfolded list shows the same.
+   In Uncommitted mode one line, "Uncommitted changes on <branch> · against
+   HEAD <short sha>".
 4. **File list**, up to 220px, 28px rows: a Viewed tick box (accent when ticked,
    `blocked` border when the file changed since), the status letter (A green,
    D red, others `blocked`), the folder dimmed and the file name, "changed" in
@@ -52,8 +55,9 @@ Top to bottom, in one rounded card on the theme's `background`:
    and Send to agent.
 
 With `props.switch` the mod draws only a 32px strip with two pills,
-**Uncommitted | Committed**, which switch the layout stack `changes-views`
-between `changes-work` and `changes-commits`. With `props.dialog` it draws only
+**Changes | Review**, which switch the layout stack `changes-views` between
+`changes-work` (Herdr's Changes panel, with its Commit box) and
+`changes-commits` (this panel). With `props.dialog` it draws only
 the send dialog. With `props.reader` it is the reader pane: a 32px header (the
 status letter, the folder dimmed and the file name, what it is a diff of, and
 the line counts), then the diff, thread cards and comment card as in the panel,
@@ -79,6 +83,12 @@ here" while there is none.
   and rebase keep. So a rewritten commit keeps the ticks of the files it did
   not change, and its threads (`herdr-review` writes the same identity on
   commit threads). Listed commits that share an identity keep their own.
+- Uncommitted mode lists what `git status` lists, untracked files included,
+  against HEAD. A file's fingerprint is HEAD's blob and the working tree's
+  content hash (`git hash-object`, which writes nothing), so a tick reads
+  "changed" after the next edit; untracked files get their line count once
+  shown. Its threads are kept per worktree (its top folder), and Branch mode
+  also shows those written on that branch, placed where their lines still are.
 - The pane button splits the followed terminal's pane to the right with the
   reader. The panel shares its open file (`commit-review.follow`: the
   repository, the unit with what its threads match, and the file) whenever that
@@ -99,7 +109,9 @@ here" while there is none.
   the dialog. `git.js`: git reads (`rev-parse`, `for-each-ref`, `merge-base`,
   `log -z --raw --no-abbrev --no-renames --diff-merges=first-parent` for the
   commits and their files, `diff --raw --numstat -z --no-abbrev`, `diff` of one
-  file), each
+  file; for Uncommitted mode `status --porcelain=v1 -z --untracked-files=all`,
+  `diff <HEAD> --raw --numstat`, `hash-object`, and `diff --no-index /dev/null`
+  for an untracked file), each
   with `--no-optional-locks -c core.fsmonitor=false -c diff.autoRefreshIndex=false`.
   `store.js`: every thread read and write goes through `exec("herdr-review", …,
   { cwd, on })`. `diff.js`: diff rows and thread placement. `highlight.js` and
@@ -152,3 +164,6 @@ here" while there is none.
 - The pane button opens a reader beside the terminal that shows the open file;
   picking another file in the panel changes it, and a comment added in the
   reader appears in the panel.
+- In Uncommitted mode a modified and a new, untracked file are listed; ticking
+  one and then editing it makes it read "changed"; a comment there is listed
+  by `herdr-review list --uncommitted` in that worktree and not in another one.

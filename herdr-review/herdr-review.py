@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Review threads on the commits of a git repository.
+"""Review threads on the commits and uncommitted work of a git repository.
 
 A thread is a discussion about some lines of one file, either in one commit
-(--commit) or in everything a branch adds since it left its base branch
-(--branch). People write threads in the Commit review panel of the Herdr app;
-agents read and answer them with this command, and can open threads of their
-own. The panel shows every change within seconds.
+(--commit), in everything a branch adds since it left its base branch
+(--branch), or in the uncommitted changes of a worktree against its HEAD
+(--uncommitted). People write threads in the Commit review panel of the Herdr
+app; agents read and answer them with this command, and can open threads of
+their own. The panel shows every change within seconds.
 
 A thread on a commit stays with that commit when it is amended or rebased:
 `list --commit` also finds threads written on an earlier version of it, by its
@@ -15,15 +16,16 @@ Run it inside the repository, or pass --repo. The threads are stored under the
 repository's git directory (see `herdr-review path`), so every worktree of the
 repository shares them and they are never committed.
 
-Line numbers are the numbers of the file's lines: in the commit itself (or at
-the branch's tip) for --side new, the default; in the commit's parent (or at
-the merge base) for --side old, which is only needed for a removed line. A
-comment without --line is about the whole file.
+Line numbers are the numbers of the file's lines: in the commit itself (at the
+branch's tip, in the working tree) for --side new, the default; in the commit's
+parent (at the merge base, at HEAD) for --side old, which is only needed for a
+removed line. A comment without --line is about the whole file.
 
 Put "--" before a text that starts with "-".
 
 Typical use by an agent:
-  herdr-review list                  open threads (add --commit/--branch)
+  herdr-review list                  open threads (add --commit, --branch
+                                     or --uncommitted)
   herdr-review show k3x9a2           one thread with its lines
   herdr-review reply k3x9a2 -- "Fixed in 3f2a1c9: it returns Err now."
   herdr-review resolve k3x9a2
@@ -44,6 +46,9 @@ from contextlib import contextmanager
 
 FORMAT = 2
 MAX_QUOTE_LINES = 60
+# The new side of an uncommitted thread: the file as it is on disk now. It is
+# never a revision, because a ref name cannot contain a space.
+WORKTREE = "the working tree"
 
 
 class ReviewError(Exception):
@@ -204,6 +209,12 @@ def target_from(args):
         target = {"kind": "commit", "commit": sha, "subject": subject,
                   "change": change}
         return target, {"new": sha, "old": parent}
+    if args.uncommitted:
+        head = commit_of(repo, "HEAD")
+        branch = git_maybe(repo, "symbolic-ref", "-q", "--short", "HEAD")
+        target = {"kind": "uncommitted", "worktree": worktree_of(repo),
+                  "branch": branch, "head": head}
+        return target, {"new": WORKTREE, "old": head}
     branch = args.branch.removeprefix("refs/heads/")
     tip = commit_of(repo, f"refs/heads/{branch}")
     base = base_branch(repo, args.base)
@@ -215,9 +226,21 @@ def target_from(args):
     return target, {"new": tip, "old": merge}
 
 
+def worktree_of(repo):
+    """The top folder of the worktree around `repo`: uncommitted threads
+    belong to one worktree, while the store is shared by all of them."""
+    return git(repo, "rev-parse", "--show-toplevel").strip()
+
+
 def file_lines(repo, rev, path):
     if rev is None:
         return None
+    if rev == WORKTREE:
+        try:
+            with open(os.path.join(worktree_of(repo), path), "rb") as f:
+                return f.read().decode("utf-8", "replace").splitlines()
+        except FileNotFoundError:
+            return None
     result = subprocess.run(
         ["git", "show", f"{rev}:{path}"], cwd=repo, capture_output=True)
     if result.returncode != 0:
@@ -254,8 +277,9 @@ def visible(thread, include_pending):
     return {**thread, "comments": shown} if shown else None
 
 
-def matches(thread, args, commit):
-    """`commit`: the hash and the identity of --commit, or None."""
+def matches(thread, args, commit, worktree):
+    """`commit`: the hash and the identity of --commit, or None. `worktree`:
+    the worktree of --uncommitted, or None."""
     target = thread["target"]
     if args.status != "all" and thread["status"] != args.status:
         return False
@@ -263,6 +287,9 @@ def matches(thread, args, commit):
         return False
     if commit and target.get("commit") != commit[0] \
             and target.get("change") != commit[1]:
+        return False
+    if worktree and (target["kind"] != "uncommitted"
+                     or target.get("worktree") != worktree):
         return False
     if args.branch and target.get("branch") != args.branch:
         return False
@@ -273,6 +300,9 @@ def where(thread):
     target = thread["target"]
     if target["kind"] == "commit":
         on = f'commit {target["commit"][:7]} "{target.get("subject", "")}"'
+    elif target["kind"] == "uncommitted":
+        on = (f'uncommitted changes in {target["worktree"]}'
+              f' (HEAD {target["head"][:7]} when written)')
     else:
         on = (f'branch {target["branch"]} since {target["base"]}'
               f' (tip {target["head"][:7]} when written)')
@@ -314,9 +344,10 @@ def cmd_list(args, store):
     if args.commit:
         sha = commit_of(args.repo, args.commit)
         commit = (sha, identity_of(args.repo, sha)[1])
+    worktree = worktree_of(args.repo) if args.uncommitted else None
     shown = []
     for thread in store.threads():
-        if not matches(thread, args, commit):
+        if not matches(thread, args, commit, worktree):
             continue
         thread = visible(thread, args.include_pending)
         if thread is not None:
@@ -496,6 +527,8 @@ def parser():
                    default="open")
     p.add_argument("--commit", help="only threads on this commit")
     p.add_argument("--branch", help="only threads on this branch")
+    p.add_argument("--uncommitted", action="store_true",
+                   help="only threads on this worktree's uncommitted changes")
     p.add_argument("--path", help="only threads on this file")
     p.add_argument("--json", action="store_true")
     p.add_argument("--include-pending", action="store_true",
@@ -512,6 +545,9 @@ def parser():
     on = p.add_mutually_exclusive_group(required=True)
     on.add_argument("--commit", help="a commit (any revision naming one)")
     on.add_argument("--branch", help="a local branch, compared to its base")
+    on.add_argument("--uncommitted", action="store_true",
+                    help="this worktree's uncommitted changes, compared to "
+                         "HEAD (new files included)")
     p.add_argument("--base", help="the branch's base (default: origin/HEAD, "
                                   "else main, else master)")
     p.add_argument("--path", required=True,

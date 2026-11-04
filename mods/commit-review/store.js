@@ -28,8 +28,8 @@ async function callJson(root, on, args) {
 // The person's name on their comments: their account name.
 const person = () => ["--role=person", `--author=${home().split("/").pop()}`];
 
-const targetArgs = (target) => target.kind === "commit"
-  ? [`--commit=${target.commit}`]
+const targetArgs = (target) => target.kind === "commit" ? [`--commit=${target.commit}`]
+  : target.kind === "uncommitted" ? ["--uncommitted"]
   : [`--branch=${target.branch}`, `--base=${target.base}`];
 
 /** Every thread, pending comments included, and the store's folder (null until the first thread is written). */

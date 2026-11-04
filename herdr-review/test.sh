@@ -101,4 +101,22 @@ git commit --quiet --amend --no-edit
 "${review}" viewed unset "branch:feat:app.txt"
 [ "$("${review}" viewed list | jq '.viewed | length')" = 0 ] || fail "viewed unset left the key"
 
+# A comment on uncommitted work quotes the working tree's lines, a new file
+# included, and only the worktree it was written in lists it.
+printf 'one\ntwo\nthree\nfour\nfive\n' > app.txt
+uncommitted_id=$("${review}" comment --uncommitted --path app.txt --line 5 -- "uncommitted note")
+[ "$("${review}" show "${uncommitted_id}" --json | jq --raw-output .thread.quote)" = five ] \
+  || fail "the quote is not the working tree's line 5"
+if "${review}" comment --uncommitted --path app.txt --line 6 -- "x" 2> /dev/null; then
+  fail "a comment on line 6 of a 5-line working tree file was accepted"
+fi
+printf 'new file\n' > fresh.txt
+"${review}" comment --uncommitted --path fresh.txt --line 1 -- "untracked note" > /dev/null \
+  || fail "a comment on an untracked file was refused"
+[ "$(count --uncommitted)" = 2 ] || fail "list --uncommitted does not find both comments"
+[ "$(count --commit HEAD)" = 1 ] || fail "an uncommitted comment is listed as the commit's"
+git worktree add --quiet "${work}/other" main
+[ "$("${review}" --repo "${work}/other" list --json --status all --uncommitted | jq '.threads | length')" = 0 ] \
+  || fail "another worktree lists this worktree's uncommitted comments"
+
 echo "herdr-review: all checks passed"

@@ -8,7 +8,9 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** Where a thread is, in words: "commit 3f2a1c9 "subject", src/app.rs, lines 40-44". */
 export function whereOf(thread) {
   const t = thread.target;
-  const on = t.kind === "commit" ? `commit ${t.commit.slice(0, 7)} "${t.subject ?? ""}"` : `branch ${t.branch} since ${t.base}`;
+  const on = t.kind === "commit" ? `commit ${t.commit.slice(0, 7)} "${t.subject ?? ""}"`
+    : t.kind === "uncommitted" ? `uncommitted changes in ${t.worktree}`
+    : `branch ${t.branch} since ${t.base}`;
   if (thread.line === null || thread.line === undefined) return `${on}, ${thread.path}, whole file`;
   const lines = thread.end_line === thread.line ? `line ${thread.line}` : `lines ${thread.line}-${thread.end_line}`;
   return `${on}, ${thread.path}, ${thread.side === "old" ? `removed ${lines}` : lines}`;
@@ -46,10 +48,20 @@ const TAIL = [
   "Do not change any file and do not commit: only leave comments. When you are done, say how many comments you left.",
 ];
 
-/** The first message of an agent asked to review: a branch (`merge` is its
- *  merge base with `base`) or a list of commits. */
+/** The first message of an agent asked to review: the uncommitted changes, a
+ *  branch (`merge` is its merge base with `base`) or a list of commits. */
 export function reviewTask({ root, on, mode, branch, base, merge, commits }) {
   const where = `${root}${on ? ` (on ${on})` : ""}`;
+  if (mode === "uncommitted") {
+    return [
+      `Review the uncommitted changes in ${where}: everything in the working tree that differs from HEAD, new files included.`,
+      "Read them with: git diff HEAD   (new files: git status --untracked-files=all)",
+      "Record every finding as a review comment on the lines it is about, one finding per comment:",
+      "  herdr-review comment --uncommitted --path <file> --line <n> [--end-line <m>] -- \"<finding>\"",
+      "Line numbers are the file's lines in the working tree now. For a removed line, add --side old and use its number at HEAD. Leave out --line for a comment on a whole file.",
+      ...TAIL,
+    ].join("\n");
+  }
   if (mode === "branch") {
     return [
       `Review the branch ${branch} in ${where}: everything it adds since it left ${base}.`,
