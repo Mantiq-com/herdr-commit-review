@@ -7,6 +7,10 @@ A thread is a discussion about some lines of one file, either in one commit
 agents read and answer them with this command, and can open threads of their
 own. The panel shows every change within seconds.
 
+A thread on a commit stays with that commit when it is amended or rebased:
+`list --commit` also finds threads written on an earlier version of it, by its
+author, author date and subject.
+
 Run it inside the repository, or pass --repo. The threads are stored under the
 repository's git directory (see `herdr-review path`), so every worktree of the
 repository shares them and they are never committed.
@@ -38,7 +42,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 
-FORMAT = 1
+FORMAT = 2
 MAX_QUOTE_LINES = 60
 
 
@@ -181,14 +185,24 @@ def commit_of(repo, rev):
     return sha
 
 
+def identity_of(repo, sha):
+    """The commit's subject, and its identity across amend and rebase (which
+    keep the author and the author date). The panel builds the same string, so
+    it must not change on its own."""
+    email, time, subject = git(repo, "log", "-1", "--format=%ae%x1f%at%x1f%s",
+                               sha).rstrip("\n").split("\x1f", 2)
+    return subject, f"{email} {time} {subject}"
+
+
 def target_from(args):
     """The target record and the two revisions its sides are read from."""
     repo = args.repo
     if args.commit:
         sha = commit_of(repo, args.commit)
         parent = git_maybe(repo, "rev-parse", "--verify", "-q", f"{sha}^1")
-        subject = git(repo, "log", "-1", "--format=%s", sha).strip()
-        target = {"kind": "commit", "commit": sha, "subject": subject}
+        subject, change = identity_of(repo, sha)
+        target = {"kind": "commit", "commit": sha, "subject": subject,
+                  "change": change}
         return target, {"new": sha, "old": parent}
     branch = args.branch.removeprefix("refs/heads/")
     tip = commit_of(repo, f"refs/heads/{branch}")
@@ -240,16 +254,16 @@ def visible(thread, include_pending):
     return {**thread, "comments": shown} if shown else None
 
 
-def matches(thread, args):
+def matches(thread, args, commit):
+    """`commit`: the hash and the identity of --commit, or None."""
     target = thread["target"]
     if args.status != "all" and thread["status"] != args.status:
         return False
     if args.path and thread["path"] != args.path:
         return False
-    if args.commit:
-        sha = commit_of(args.repo, args.commit)
-        if target.get("commit") != sha:
-            return False
+    if commit and target.get("commit") != commit[0] \
+            and target.get("change") != commit[1]:
+        return False
     if args.branch and target.get("branch") != args.branch:
         return False
     return True
@@ -296,9 +310,13 @@ def print_thread(thread, full):
 
 
 def cmd_list(args, store):
+    commit = None
+    if args.commit:
+        sha = commit_of(args.repo, args.commit)
+        commit = (sha, identity_of(args.repo, sha)[1])
     shown = []
     for thread in store.threads():
-        if not matches(thread, args):
+        if not matches(thread, args, commit):
             continue
         thread = visible(thread, args.include_pending)
         if thread is not None:

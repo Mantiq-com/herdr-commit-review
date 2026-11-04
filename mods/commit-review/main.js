@@ -85,6 +85,12 @@ const descKey = (d) => `${d.kind}|${d.n}|${d.text}`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const statusColor = (f, t) => f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : t.blocked;
 
+// A Viewed tick stores the file's blobs before and after: the file reads
+// "changed" once they differ. A commit's ticks are kept under its `change`
+// (git.js), so they carry over to the commit an amend or a rebase makes.
+const blobsOf = (f) => `${f.oldBlob}..${f.newBlob}`;
+const commitViewKey = (commit, path) => `change:${commit.change}:${path}`;
+
 function ago(when) {
   const seconds = Math.max(0, Date.now() / 1000 - (typeof when === "number" ? when : Date.parse(when) / 1000));
   if (seconds < 60) return "now";
@@ -222,18 +228,23 @@ export default class Review extends View {
     if (asked) { mode = "commits"; selected = asked; extraShas = asked.filter((s) => !strip.has(s)); }
     if (mode === "branch" && !merge) mode = "commits";
     const extra = await commitsByHash(git, extraShas);
+    // Listed commits that share a `change` keep their own ticks and threads.
+    const changes = new Map();
+    for (const c of [...extra, ...commits]) changes.set(c.change, (changes.get(c.change) ?? 0) + 1);
+    for (const c of [...extra, ...commits]) if (changes.get(c.change) > 1) c.change = `${c.change} ${c.sha}`;
     const known = new Set([...strip, ...extra.map((c) => c.sha)]);
     if (selected) selected = selected.filter((s) => known.has(s));
     if (mode === "commits" && selected === null) selected = commits.length ? [commits[0].sha] : [];
 
     const emptyTree = same && this.emptyTree ? this.emptyTree : await emptyTreeOf(git);
     // `match`: which threads a unit shows (threadsOn). A branch also shows the
-    // threads written on its commits.
+    // threads written on its commits; a commit thread matches by hash, or by
+    // `change` once the commit was amended or rebased.
     const units = mode === "branch"
-      ? [{ key: "branch", target: { kind: "branch", branch, base, head: tip }, from: merge, to: tip, label: `${branch} since ${base}`, match: { branch, commits: commits.map((c) => c.sha) } }]
+      ? [{ key: "branch", target: { kind: "branch", branch, base, head: tip }, from: merge, to: tip, label: `${branch} since ${base}`, match: { branch, commits: commits.map((c) => c.sha), changes: commits.map((c) => c.change) } }]
       : [...extra, ...commits].filter((c) => selected.includes(c.sha)).map((c) => ({
         key: c.sha, commit: c, target: { kind: "commit", commit: c.sha, subject: c.subject },
-        from: c.parents[0] ?? emptyTree, to: c.sha, label: `${c.short} ${c.subject}`, match: { commits: [c.sha] },
+        from: c.parents[0] ?? emptyTree, to: c.sha, label: `${c.short} ${c.subject}`, match: { commits: [c.sha], changes: [c.change] },
       }));
     const lists = await Promise.all(units.map((u) => filesOf(git, u.from, u.to)));
     units.forEach((u, i) => { u.files = lists[i].files; u.limited = lists[i].limited; });
@@ -403,7 +414,7 @@ export default class Review extends View {
     return this.threads.filter((t) => {
       if (t.path !== path) return false;
       const target = t.target;
-      if (target.kind === "commit") return m.commits.includes(target.commit);
+      if (target.kind === "commit") return m.commits.includes(target.commit) || m.changes.includes(target.change);
       return target.kind === "branch" && m.branch !== undefined && target.branch === m.branch;
     });
   }
@@ -544,17 +555,36 @@ export default class Review extends View {
     });
   }
 
-  viewKey(unit, f) { return unit.target.kind === "commit" ? `commit:${unit.target.commit}:${f.path}` : `branch:${unit.target.branch}:${f.path}`; }
-  // A commit never changes; a branch's file is viewed while its blobs at the merge base and the tip are the ones ticked.
-  viewValue(unit, f) { return unit.target.kind === "commit" ? "1" : `${f.oldBlob}..${f.newBlob}`; }
-  viewState(unit, f) {
-    const v = this.viewed[this.viewKey(unit, f)];
-    return v === undefined ? "no" : v === this.viewValue(unit, f) ? "yes" : "changed";
+  viewKey(unit, f) { return unit.target.kind === "commit" ? commitViewKey(unit.commit, f.path) : `branch:${unit.target.branch}:${f.path}`; }
+  viewState(unit, f) { return this.stateOf(this.viewKey(unit, f), blobsOf(f)); }
+  stateOf(key, blobs) {
+    const v = this.viewed[key];
+    return v === undefined ? "no" : v === blobs ? "yes" : "changed";
+  }
+
+  // A commit's review progress, from its files' ticks in Commits mode:
+  // "changed" when a file viewed before an amend or rebase differs now,
+  // "reviewed" when every file is viewed, "partial" when some are.
+  commitState(c) {
+    let viewed = 0, changed = 0;
+    for (const f of c.files) {
+      const state = this.stateOf(commitViewKey(c, f.path), blobsOf(f));
+      if (state === "yes") viewed++;
+      else if (state === "changed") changed++;
+    }
+    const state = changed ? "changed" : c.files.length && viewed === c.files.length ? "reviewed" : viewed ? "partial" : "none";
+    return { state, viewed, total: c.files.length };
+  }
+
+  progressMark(p, id, t) {
+    if (p.state === "changed") return div().id(id).flex_none().text_size(10).text_color(t.blocked).tooltip("A file you viewed is different now: the commit was amended or rebased").child("changed");
+    if (p.state === "partial") return div().id(id).flex_none().text_size(10.5).text_color(t.dim).tooltip(`In review: ${p.viewed} of ${plural(p.total, "file")} viewed`).child(`${p.viewed}/${p.total}`);
+    return div().id(id).flex_none().tooltip("Reviewed: every file viewed").child(svg(`${ICONS}/check.svg`).size(12).text_color(t.ansi2));
   }
 
   toggleViewed(unit, f, cx) {
     if (!this.repo) return;
-    const k = this.viewKey(unit, f), on = this.viewState(unit, f) !== "yes", value = this.viewValue(unit, f);
+    const k = this.viewKey(unit, f), on = this.viewState(unit, f) !== "yes", value = blobsOf(f);
     const { root } = this.repo, where = this.on;
     if (on) this.viewed = { ...this.viewed, [k]: value };
     else { const { [k]: _gone, ...rest } = this.viewed; this.viewed = rest; }
@@ -744,13 +774,14 @@ export default class Review extends View {
 
   commitStrip(t) {
     const selecting = this.mode === "commits", list = [...this.extra.map((c) => ({ ...c, extra: true })), ...this.commits];
-    const count = (this.selected ?? []).length;
+    const count = (this.selected ?? []).length, reviewed = list.filter((c) => this.commitState(c).state === "reviewed").length;
     const link = (id, label, action) => div().id(id).px(6).rounded(4).cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(label);
     const head = h_flex().id("commits-head").h(28).flex_none().px(12).gap(8).items_center().text_size(11.5).text_color(t.muted)
       .when(!selecting, (e) => e.cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => { this.showCommits = !this.showCommits; cx.notify(); })
         .child(div().min_w(0).truncate().child(this.merge ? `${plural(this.commits.length, "commit")} on ${this.branch} since ${this.base} · merge base ${this.merge.slice(0, 7)}` : `${this.branch} is the base branch`))
         .child(svg(`${ICONS}/chevron-down.svg`).size(10).flex_none()))
-      .when(selecting, (e) => e.child(div().child(`${count} of ${plural(list.length, "commit")} selected`)).child(div().text_color(t.dim).child("shift-click: a range"))
+      .when(selecting, (e) => e.child(div().flex_none().child(`${count} of ${plural(list.length, "commit")} selected${reviewed ? ` · ${reviewed} reviewed` : ""}`))
+        .child(div().min_w(0).truncate().text_color(t.dim).child("shift-click: a range"))
         .child(div().flex_1())
         .child(link("select-all", "All", (_e, cx) => { this.selected = list.map((c) => c.sha); this.changed(cx); }))
         .child(link("select-none", "None", (_e, cx) => { this.selected = []; this.changed(cx); })));
@@ -760,15 +791,16 @@ export default class Review extends View {
   }
 
   commitRow(c, t, selecting) {
-    const on = selecting && (this.selected ?? []).includes(c.sha);
-    const open = this.threads.filter((th) => th.target.kind === "commit" && th.target.commit === c.sha && th.status === "open").length;
+    const on = selecting && (this.selected ?? []).includes(c.sha), progress = this.commitState(c);
+    const open = this.threads.filter((th) => th.target.kind === "commit" && (th.target.commit === c.sha || th.target.change === c.change) && th.status === "open").length;
     return h_flex().id(`commit-${c.sha}`).h(26).flex_none().px(6).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).when(on, (e) => e.bg(t.selected))
       .tooltip(selecting ? `${c.subject}\n${c.author}` : "Review this commit alone")
       .on_click((e, cx) => selecting ? this.toggleCommit(c.sha, Boolean(e?.modifiers?.shift), cx) : this.reviewOnly(c.sha, cx))
       .when(selecting, (e) => e.child(this.tick(on, t)))
       .child(div().min_w(56).flex_none().font_family(codeFont()).text_size(11).text_color(t.dim).child(c.short))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).child(c.subject))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).when(progress.state === "reviewed", (e) => e.opacity(0.5)).child(c.subject))
       .when(Boolean(c.extra), (e) => e.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_size(10).text_color(t.dim).child(`not on ${this.branch}`)))
+      .when(progress.state !== "none", (e) => e.child(this.progressMark(progress, `progress-${c.sha}`, t)))
       .when(open > 0, (e) => e.child(this.badge(open, t)))
       .child(div().flex_none().text_size(10.5).text_color(t.dim).child(ago(c.time)));
   }
@@ -801,9 +833,11 @@ export default class Review extends View {
     const several = this.units.length > 1, rows = [];
     for (const u of this.units) {
       if (several) {
+        const progress = this.commitState(u.commit);
         rows.push(h_flex().id(`unit-${u.key}`).h(24).flex_none().px(8).pt(4).gap(8).items_center().text_size(11)
           .child(div().flex_none().font_family(codeFont()).text_color(t.dim).child(u.commit.short))
-          .child(div().min_w(0).truncate().text_color(t.muted).child(u.commit.subject)));
+          .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(u.commit.subject))
+          .when(progress.state !== "none", (e) => e.child(this.progressMark(progress, `unit-progress-${u.key}`, t))));
       }
       for (const f of u.files) rows.push(this.fileRow(u, f, t));
       if (u.limited) rows.push(div().px(8).py(2).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files"));

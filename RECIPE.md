@@ -23,16 +23,21 @@ Top to bottom, in one rounded card on the theme's `background`:
    **Submit review · N** button while the person has pending comments.
 3. **Commit strip.** In Branch mode one line, "N commits on <branch> since
    <base> · merge base <short sha>", which unfolds a read-only list. In
-   Commits mode "K of N commits selected · shift-click: a range · All · None",
-   then a list of 26px rows: a tick box, the short hash in the code font, the
-   subject, an open-thread count badge, and the age ("3h", "2d"). Commits not on
-   the branch (from a request) carry a "not on <branch>" tag.
+   Commits mode "K of N commits selected · R reviewed · shift-click: a range ·
+   All · None", then a list of 26px rows: a tick box, the short hash in the code
+   font, the subject, the review progress, an open-thread count badge, and the
+   age ("3h", "2d"). The progress comes from the commit's Viewed ticks: a dim
+   "2/5" while some of its files are viewed, a green check (and the subject
+   dimmed to 50%) when all are, "changed" in `blocked` when a viewed file
+   differs since an amend or rebase. Commits not on the branch (from a request)
+   carry a "not on <branch>" tag. Branch mode's unfolded list shows the same.
 4. **File list**, up to 220px, 28px rows: a Viewed tick box (accent when ticked,
    `blocked` border when the file changed since), the status letter (A green,
    D red, others `blocked`), the folder dimmed and the file name, "changed" in
    `blocked` when it changed since it was viewed, a speech bubble with the open
    thread count, and the line counts. Viewed rows are dimmed to 50%. With
-   several commits, each commit's files sit under a header row (hash, subject).
+   several commits, each commit's files sit under a header row (hash, subject,
+   progress).
 5. **Diff**, the rest: a virtual list in the terminal's font, one size smaller.
    Hunk headers on `raised`; added and removed rows tinted with the theme's
    green and red, a tinted gutter with the line number, and a colored sign
@@ -68,6 +73,12 @@ here" while there is none.
 - A click on a thread card opens the thread in the card. The person's pending
   comments can be edited or deleted; submitted ones cannot.
 - Ticking Viewed on the open file opens the next file not viewed yet.
+- A tick stores the file's blobs before and after; the file reads "changed"
+  once they differ. A branch's ticks are kept per branch, a commit's under its
+  identity: its author's email, the author time and the subject, which amend
+  and rebase keep. So a rewritten commit keeps the ticks of the files it did
+  not change, and its threads (`herdr-review` writes the same identity on
+  commit threads). Listed commits that share an identity keep their own.
 - The pane button splits the followed terminal's pane to the right with the
   reader. The panel shares its open file (`commit-review.follow`: the
   repository, the unit with what its threads match, and the file) whenever that
@@ -86,7 +97,9 @@ here" while there is none.
 
 - `mods/commit-review/main.js`: the panel, the switch strip and the entry of
   the dialog. `git.js`: git reads (`rev-parse`, `for-each-ref`, `merge-base`,
-  `log -z`, `diff --raw --numstat -z --no-abbrev`, `diff` of one file), each
+  `log -z --raw --no-abbrev --no-renames --diff-merges=first-parent` for the
+  commits and their files, `diff --raw --numstat -z --no-abbrev`, `diff` of one
+  file), each
   with `--no-optional-locks -c core.fsmonitor=false -c diff.autoRefreshIndex=false`.
   `store.js`: every thread read and write goes through `exec("herdr-review", …,
   { cwd, on })`. `diff.js`: diff rows and thread placement. `highlight.js` and
@@ -114,6 +127,9 @@ here" while there is none.
   (`git hash-object -t tree /dev/null`) so SHA-256 repositories work.
 - `herdr-review` takes option values as `--name=value`, because a quoted line
   can start with "-".
+- A commit's identity string is built twice, in `git.js` (`parseLog`) and in
+  `herdr-review.py` (`identity_of`): keep them the same, or threads stop
+  following rewritten commits.
 - The send dialog types the text into a terminal: more than about 8 KB is slow
   or cut short in some agents, and the dialog says so.
 
@@ -129,6 +145,10 @@ here" while there is none.
   Submit review sends it, and then `herdr-review list` does.
 - `herdr-review comment --commit HEAD --path <a changed file> --line <a changed line> -- "x"`
   makes a card appear under that line, with a notification.
+- In Commits mode, ticking some of a commit's files shows "k/n" on its row, and
+  all of them a check. After `git commit --amend` changes a viewed file, the
+  row reads "changed", the other files stay viewed, and the commit's threads
+  still show.
 - The pane button opens a reader beside the terminal that shows the open file;
   picking another file in the panel changes it, and a comment added in the
   reader appears in the panel.

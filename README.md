@@ -14,6 +14,11 @@ review comments of their own, all with one small command.
   shown as its own diff. A branch filter picks which branch.
 - **Viewed ticks.** Every file has a Viewed box. A file you ticked shows
   "changed" again when a later commit changes it, as on GitHub.
+- **Commit progress.** Each commit in the list shows how far its review got,
+  from its files' ticks: `2/5` while it is in review, a green check once every
+  file is viewed. An amended or rebased commit keeps its ticks and threads (it
+  is recognised by its author, author date and subject); a file that differs
+  afterwards shows "changed", and so does the commit.
 - **Reader pane.** The pane button at the right of the status row opens the
   open file's diff in a pane beside the terminal, with more room to read. It
   has the same threads and comment card, and follows the file you pick in the
@@ -45,6 +50,8 @@ review comments of their own, all with one small command.
 
    Agents that run in a sandbox need it on the sandbox's `PATH`, and need write
    access to the repository's git directory (see [Storage](#storage)).
+   Reinstall it whenever you update the mod: the panel checks that both use the
+   same format, and says so when they do not.
 
 2. Copy the mod into the Herdr app's folder and check it:
 
@@ -95,7 +102,9 @@ herdr-review comment --branch my-feature --path src/app.rs --line 42 -- "..."
 Line numbers are the file's lines in that commit (or at the branch's tip);
 `--side old` comments on a removed line, numbered as before the change.
 `--author` is the name the panel shows; without it a comment is signed
-"agent". `herdr-review --help` explains the rest.
+"agent". A thread on a commit follows it through amend and rebase:
+`herdr-review list --commit` also finds threads written on an earlier version
+of it. `herdr-review --help` explains the rest.
 
 ## Storage
 

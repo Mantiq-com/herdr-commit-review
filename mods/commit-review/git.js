@@ -4,7 +4,7 @@
 import { exec } from "herdr";
 
 export const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
-const SEP = "\x1f";
+const SEP = "\x1f", RECORD = "\x1e";
 // The most commits the strip lists: a branch's since its base, or the latest on the base itself.
 const BRANCH_COMMITS = 200, BASE_COMMITS = 50;
 // Limits, so that one huge file or commit cannot stall the panel.
@@ -52,13 +52,27 @@ export async function baseOf(git, preferred) {
   return { base, ref: null };
 }
 
+/** Commits as LOG prints them: each record, then the commit's files with their
+ *  blobs. `change` is the commit's identity across amend and rebase, which keep
+ *  the author and the author date; the subject keeps apart two commits made in
+ *  the same second. `herdr-review` writes the same string on commit threads. */
 function parseLog(stdout) {
-  return stdout.split("\0").map((s) => s.replace(/^\n/, "")).filter(Boolean).map((record) => {
-    const [sha, short, subject, author, time, parents] = record.split(SEP);
-    return { sha, short, subject, author, time: Number(time), parents: parents ? parents.split(" ") : [] };
-  });
+  const commits = [], parts = stdout.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const token = parts[i].replace(/^\n/, "");
+    if (token.startsWith(RECORD)) {
+      const [sha, short, subject, author, email, time, parents] = token.slice(1).split(SEP);
+      commits.push({ sha, short, subject, author, time: Number(time), parents: parents ? parents.split(" ") : [], change: `${email} ${time} ${subject}`, files: [] });
+    } else if (token.startsWith(":") && commits.length) {
+      const [, , oldBlob, newBlob, status] = token.slice(1).split(" ");
+      commits[commits.length - 1].files.push({ path: parts[++i], status: status[0], oldBlob, newBlob });
+    }
+  }
+  return commits;
 }
-const LOG = ["log", "-z", `--format=%H${SEP}%h${SEP}%s${SEP}%an${SEP}%at${SEP}%P`];
+// Each commit's files are its diff to its first parent, as filesOf reads it.
+const LOG = ["log", "-z", "--raw", "--no-abbrev", "--no-renames", "--diff-merges=first-parent",
+  `--format=${RECORD}%H${SEP}%h${SEP}%s${SEP}%an${SEP}%ae${SEP}%at${SEP}%P`];
 
 /** A branch's tip, its merge base with the base (null when it is the base or
  *  has nothing of its own), and its commits, newest first. */

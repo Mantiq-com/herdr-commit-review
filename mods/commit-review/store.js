@@ -7,7 +7,7 @@ import { exec, home } from "herdr";
 
 // The JSON format of `herdr-review`. A machine whose command prints another
 // one has not been rebuilt since the format changed.
-const FORMAT = 1;
+const FORMAT = 2;
 
 async function call(root, on, args) {
   let r;

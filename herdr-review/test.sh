@@ -85,6 +85,15 @@ if "${review}" edit-comment "${branch_id}" "${first}" -- "changed" 2> /dev/null;
   fail "a submitted comment was edited"
 fi
 
+# A thread on a commit stays with it when the commit is amended: the amended
+# commit keeps the author, author date and subject that identify it.
+[ "$(count --commit HEAD)" = 1 ] || fail "the commit does not have its one thread"
+printf 'notes\n' > notes.txt
+git add notes.txt
+git commit --quiet --amend --no-edit
+[ "$(count --commit HEAD)" = 1 ] || fail "the amended commit lost its thread"
+[ "$(count --commit HEAD~1)" = 1 ] || fail "the parent commit's thread moved"
+
 # Viewed ticks round-trip.
 "${review}" viewed set "branch:feat:app.txt" "a..b"
 [ "$("${review}" viewed list | jq --raw-output '.viewed["branch:feat:app.txt"]')" = "a..b" ] \
