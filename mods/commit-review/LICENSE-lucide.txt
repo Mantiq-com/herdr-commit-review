@@ -1,4 +1,5 @@
-check.svg and chevron-down.svg in this folder are Lucide icons (https://lucide.dev).
+check.svg, chevron-down.svg and panel-right.svg in this folder are Lucide icons
+(https://lucide.dev).
 
 ISC License
 

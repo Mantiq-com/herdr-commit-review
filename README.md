@@ -14,6 +14,10 @@ review comments of their own, all with one small command.
   shown as its own diff. A branch filter picks which branch.
 - **Viewed ticks.** Every file has a Viewed box. A file you ticked shows
   "changed" again when a later commit changes it, as on GitHub.
+- **Reader pane.** The pane button at the right of the status row opens the
+  open file's diff in a pane beside the terminal, with more room to read. It
+  has the same threads and comment card, and follows the file you pick in the
+  panel.
 - **Threads.** Click a line (click another to widen the range, or click a hunk
   header for the whole hunk) to comment; the speech bubble on a file row
   comments on the whole file. Your comments stay pending until **Submit
@@ -119,9 +123,10 @@ outside the repository and makes no network request.
   this panel as well, run `layout.select {stack: "changes-views", child: "changes-commits"}`.
 - Mod commands for `keys.json`: `commit-review.submit`, `commit-review.next`
   (the next file not viewed yet) and `commit-review.mode` (Branch or Commits).
-- Props: `font_size` (px; default: the terminal's font size minus one) and
+- Props: `font_size` (px; default: the terminal's font size minus one),
   `base` (the branch reviews compare against; default: origin's HEAD branch,
-  else `main`, else `master`).
+  else `main`, else `master`) and `reader` (`true`: the reader pane, which
+  shows the file the panel has open).
 
 ## Development
 
@@ -132,6 +137,6 @@ herdr-app check mods/commit-review
 
 ## Licence
 
-Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). The check and chevron
-icons are Lucide icons under the ISC licence
+Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). The check, chevron
+and panel icons are Lucide icons under the ISC licence
 ([mods/commit-review/LICENSE-lucide.txt](mods/commit-review/LICENSE-lucide.txt)).

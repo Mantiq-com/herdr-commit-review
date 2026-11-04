@@ -3,6 +3,6 @@ Copyright 2026 the herdr-commit-review authors
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-mods/commit-review/check.svg and mods/commit-review/chevron-down.svg are Lucide
-icons (https://lucide.dev), under the ISC License; see
-mods/commit-review/LICENSE-lucide.txt.
+mods/commit-review/check.svg, mods/commit-review/chevron-down.svg and
+mods/commit-review/panel-right.svg are Lucide icons (https://lucide.dev), under
+the ISC License; see mods/commit-review/LICENSE-lucide.txt.

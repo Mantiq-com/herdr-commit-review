@@ -18,7 +18,8 @@ Top to bottom, in one rounded card on the theme's `background`:
    and "base"), then on the right **Ask agent** (a box with a chevron; its
    popover lists the installed agents).
 2. **Status row**, 30px, 11.5px text: "3/12 viewed" (green when all are
-   viewed), `+added` in green and `−removed` in red, and on the right a solid
+   viewed), `+added` in green and `−removed` in red, and on the right a 22px
+   pane button (Lucide's panel-right) while a file is open, then a solid
    **Submit review · N** button while the person has pending comments.
 3. **Commit strip.** In Branch mode one line, "N commits on <branch> since
    <base> · merge base <short sha>", which unfolds a read-only list. In
@@ -48,7 +49,11 @@ Top to bottom, in one rounded card on the theme's `background`:
 With `props.switch` the mod draws only a 32px strip with two pills,
 **Uncommitted | Committed**, which switch the layout stack `changes-views`
 between `changes-work` and `changes-commits`. With `props.dialog` it draws only
-the send dialog.
+the send dialog. With `props.reader` it is the reader pane: a 32px header (the
+status letter, the folder dimmed and the file name, what it is a diff of, and
+the line counts), then the diff, thread cards and comment card as in the panel,
+for the file the panel has open; "Pick a file in the review panel to read it
+here" while there is none.
 
 ## How it behaves
 
@@ -63,6 +68,12 @@ the send dialog.
 - A click on a thread card opens the thread in the card. The person's pending
   comments can be edited or deleted; submitted ones cannot.
 - Ticking Viewed on the open file opens the next file not viewed yet.
+- The pane button splits the followed terminal's pane to the right with the
+  reader. The panel shares its open file (`commit-review.follow`: the
+  repository, the unit with what its threads match, and the file) whenever that
+  changes; the reader loads that file's diff and threads itself and follows
+  each change. Another file closes a new comment there; an open thread stays.
+  Key commands and notifications stay with the panel, so each happens once.
 - Agent status colors the dots in the send dialog: working, blocked, done and
   idle use the theme's colors of those names. Sending to a blocked agent takes
   a second press, "Send anyway".
@@ -84,11 +95,11 @@ the send dialog.
 - `herdr` functions: `spaces`, `panes`, `focused`, `layout`, `theme`,
   `settings`, `props`, `shared`/`setShared`, `nextCommand`, `exec`, `hc`,
   `agents`, `knownAgents`, `watchFolder`, `openOverlay`/`closeOverlay`,
-  `notify`, `run` (`tab.new`, `layout.select`, `agent.focus`).
+  `notify`, `run` (`tab.new`, `pane.split`, `layout.select`, `agent.focus`).
 - `herdr-review/herdr-review.py`: Python standard library only; threads in
   `<git common dir>/herdr-review/threads/<id>.json`, ticks in `viewed.json`,
   an `fcntl` lock around every write, atomic renames.
-- Icons: Lucide's check and chevron-down, and a speech bubble.
+- Icons: Lucide's check, chevron-down and panel-right, and a speech bubble.
 
 ## Watch out
 
@@ -118,3 +129,6 @@ the send dialog.
   Submit review sends it, and then `herdr-review list` does.
 - `herdr-review comment --commit HEAD --path <a changed file> --line <a changed line> -- "x"`
   makes a card appear under that line, with a notification.
+- The pane button opens a reader beside the terminal that shows the open file;
+  picking another file in the panel changes it, and a comment added in the
+  reader appears in the panel.

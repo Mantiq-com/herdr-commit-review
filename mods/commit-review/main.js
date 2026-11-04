@@ -10,6 +10,10 @@
 // (WORK, Herdr's Changes panel or another mod) and this panel (COMMITTED).
 // The README shows both layouts.
 //
+// With props { reader: true } the mod is a reader pane: only the diff of the
+// file the panel has open (shared as FOLLOW), with its threads and comment
+// card, for more room to read. The panel's button opens it beside the terminal.
+//
 // Threads are stored by the `herdr-review` command (store.js) under the
 // repository's git directory. The person's comments stay pending until
 // "Submit review" sends them to an agent through the send dialog (dialog.js,
@@ -24,7 +28,8 @@
 //          branch, else main, else master) }.
 // Shared: "commit-review.request" { root, on, commits, at } shows those commits
 // (another mod's "review this commit"); "commit-review.view" keeps the mode,
-// branch and selected commits of each repository.
+// branch and selected commits of each repository; "commit-review.follow" is
+// the panel's open file, which the reader pane shows.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, v_virtual_list, VirtualListScrollHandle, Popover } from "gpui-base";
 import { spaces, panes, focused, theme, settings, nextCommand, props, shared, setShared, watchFolder, openOverlay, notify, knownAgents, run, layout } from "herdr";
@@ -36,7 +41,7 @@ import { loadThreads, loadViewed, addThread, reply, resolve, reopen, editComment
 import { diffRows, anchorOf, place } from "./diff.js";
 import { reviewText, reviewTask, whereOf } from "./agent.js";
 
-const VIEW = "commit-review.view", REQUEST = "commit-review.request", SENT = "commit-review.sent";
+const VIEW = "commit-review.view", REQUEST = "commit-review.request", SENT = "commit-review.sent", FOLLOW = "commit-review.follow";
 const NONE = "#00000000", ICONS = "mods/commit-review";
 // The ids the switch strip selects in the layout (the README's Changes
 // layout). Another mod that opens this view selects COMMITTED in VIEWS too.
@@ -48,17 +53,18 @@ const CARD_COMMENTS = 3, CARD_LINES = 5, CARD_QUOTE = 3;
 // border; one small text line; the gap between its children.
 const CARD_FRAME = 24, SMALL_LINE = 15, CARD_GAP = 4;
 
-// The folder and machine the panel reviews: those of the focused terminal.
-// A focused mod pane (this panel opened as a pane, for one) has no folder, so
-// the first terminal of its tab stands in for it.
+// The folder and machine the panel reviews: those of the focused terminal,
+// and that terminal's pane (the reader pane opens beside it). A focused mod
+// pane (this panel opened as a pane, for one) has no folder, so the first
+// terminal of its tab stands in for it.
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
   let pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   if (pane && !pane.terminal) pane = panes().find((p) => p.tab === pane.tab && p.terminal) ?? pane;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
+  return { cwd: pane?.cwd || f?.cwd || space?.folder, on, pane: pane?.pane ?? null };
 }
-const key = () => JSON.stringify(location());
+const key = () => { const { cwd, on } = location(); return JSON.stringify({ cwd, on }); };
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -77,6 +83,7 @@ const desc = (r) => ({ kind: r.kind, n: (r.kind === "-" ? r.old : r.number) ?? n
 const descKey = (d) => `${d.kind}|${d.n}|${d.text}`;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const statusColor = (f, t) => f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : t.blocked;
 
 function ago(when) {
   const seconds = Math.max(0, Date.now() / 1000 - (typeof when === "number" ? when : Date.parse(when) / 1000));
@@ -121,6 +128,9 @@ export default class Review extends View {
     // panel's two views: this copy is only that.
     if (props()?.dialog) { this.dialog = new SendDialog(); this.dialog.init(cx); return; }
     if (props()?.switch) { this.strip = true; this.shown = WORK; return; }
+    // The reader follows the panel's open file and leaves key commands to the panel.
+    this.reader = Boolean(props()?.reader);
+    this.followAt = this.reader ? shared(FOLLOW)?.at ?? null : null;
     this.handle = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
     this.fontSize = codeSize(); this.row = rowOf(this.fontSize);
@@ -134,7 +144,7 @@ export default class Review extends View {
     this.reset();
     this.refresh(cx);
     cx.timer.every(10000, (cx) => this.refresh(cx));
-    cx.spawn(async (cx) => {
+    if (!this.reader) cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
         if (c === "submit") this.submit(cx);
@@ -148,7 +158,7 @@ export default class Review extends View {
   reset() {
     this.repo = null; this.on = null; this.git = null; this.error = null; this.storeError = null; this.note_ = null;
     this.branches = []; this.current = null; this.branch = null; this.base = null; this.merge = null; this.tip = null;
-    this.commits = []; this.extra = []; this.commitSet = new Set(); this.emptyTree = null;
+    this.commits = []; this.extra = []; this.emptyTree = null;
     this.mode = "branch"; this.selected = null; this.lastClicked = null; this.showCommits = false;
     this.units = []; this.threads = []; this.viewed = {}; this.seen = null; this.watched = null;
     this.open = null; this.closed = false; this.choosing = null; this.agentList = null;
@@ -156,16 +166,26 @@ export default class Review extends View {
     this.composer = null; this.note?.set_value(""); this.noteText = "";
   }
 
+  // What a load belongs to: the reader's file, or the panel's folder and machine.
+  contextKey() {
+    if (!this.reader) return key();
+    const f = shared(FOLLOW);
+    return JSON.stringify(f?.path ? [f.repo.id, f.unit.key, f.path] : null);
+  }
+
   refresh(cx) {
     if (this.loading) { this.again = true; return; }
-    const { cwd, on } = location(), context = key();
-    if (context !== this.context) { this.context = context; this.reset(); }
-    if (!cwd) return;
+    const { cwd, on } = location(), context = this.contextKey();
+    if (this.reader) this.context = context;
+    else {
+      if (context !== this.context) { this.context = context; this.reset(); }
+      if (!cwd) return;
+    }
     this.loading = true;
     const gen = this.gen;
     cx.spawn(async (cx) => {
-      try { await this.load(cwd, on, context, gen, cx); }
-      catch (e) { if (key() === context) this.error = String(e?.message ?? e); }
+      try { await (this.reader ? this.loadReader(shared(FOLLOW), context, cx) : this.load(cwd, on, context, gen, cx)); }
+      catch (e) { if (this.contextKey() === context) this.error = String(e?.message ?? e); }
       finally {
         this.loading = false;
         cx.notify();
@@ -207,11 +227,13 @@ export default class Review extends View {
     if (mode === "commits" && selected === null) selected = commits.length ? [commits[0].sha] : [];
 
     const emptyTree = same && this.emptyTree ? this.emptyTree : await emptyTreeOf(git);
+    // `match`: which threads a unit shows (threadsOn). A branch also shows the
+    // threads written on its commits.
     const units = mode === "branch"
-      ? [{ key: "branch", target: { kind: "branch", branch, base, head: tip }, from: merge, to: tip, label: `${branch} since ${base}` }]
+      ? [{ key: "branch", target: { kind: "branch", branch, base, head: tip }, from: merge, to: tip, label: `${branch} since ${base}`, match: { branch, commits: commits.map((c) => c.sha) } }]
       : [...extra, ...commits].filter((c) => selected.includes(c.sha)).map((c) => ({
         key: c.sha, commit: c, target: { kind: "commit", commit: c.sha, subject: c.subject },
-        from: c.parents[0] ?? emptyTree, to: c.sha, label: `${c.short} ${c.subject}`,
+        from: c.parents[0] ?? emptyTree, to: c.sha, label: `${c.short} ${c.subject}`, match: { commits: [c.sha] },
       }));
     const lists = await Promise.all(units.map((u) => filesOf(git, u.from, u.to)));
     units.forEach((u, i) => { u.files = lists[i].files; u.limited = lists[i].limited; });
@@ -230,7 +252,6 @@ export default class Review extends View {
       if (!asked) this.note_ = `Git Graph asked to review a commit of ${request.root}, but this panel shows ${repo.root}`;
     }
     Object.assign(this, { repo: { ...repo, id }, on, git, branches, current, branch, base, merge, tip, commits, extra, mode, selected, units, emptyTree, viewed, storeError, error: null });
-    this.commitSet = strip;
     this.setThreads(threads);
     if (asked) { this.remember(); this.open = null; this.closed = false; }
     if (store) this.watchStore(store, cx);
@@ -242,6 +263,52 @@ export default class Review extends View {
     if (this.open) await this.loadDiff(context);
     else this.setLines([]);
     this.rebuild();
+    this.follow();
+  }
+
+  // The reader pane's load: the file the panel has open (FOLLOW), its threads
+  // and its diff. Another file closes a new comment; a thread stays open.
+  async loadReader(follow, context, cx) {
+    if (!follow?.path) { this.reset(); return; }
+    const { repo, unit, path } = follow;
+    if (this.repo?.id !== repo.id) this.reset();
+    const open = this.open?.unit === unit.key && this.open?.path === path ? this.open : { unit: unit.key, path };
+    if (open !== this.open && this.composer && this.composer.kind !== "thread") this.closeComposer();
+    Object.assign(this, { repo, on: repo.on, git: gitIn(repo.root, repo.on), units: [unit], open, closed: false, error: null });
+    try {
+      const loaded = await loadThreads(repo.root, repo.on);
+      if (this.contextKey() !== context) { this.again = true; return; }
+      this.storeError = null;
+      this.setThreads(loaded.threads);
+      if (loaded.store) this.watchStore(loaded.store, cx);
+    } catch (e) { this.storeError = String(e?.message ?? e); }
+    await this.loadDiff(context);
+    this.rebuild();
+  }
+
+  // Shares the open file, and what loading it takes, with the reader pane.
+  // Only a change is shared: setShared redraws every mod.
+  follow() {
+    if (this.reader) return;
+    const found = this.repo && this.fileOf(this.open);
+    const value = found ? {
+      repo: { root: this.repo.root, on: this.on, id: this.repo.id },
+      unit: { key: found.unit.key, target: found.unit.target, from: found.unit.from, to: found.unit.to, label: found.unit.label, match: found.unit.match, files: [found.file] },
+      path: found.file.path,
+    } : { path: null };
+    const text = JSON.stringify(value);
+    if (text === this.followed) return;
+    this.followed = text;
+    setShared(FOLLOW, { ...value, at: Date.now() });
+  }
+
+  // Opens the reader pane beside the terminal the panel follows.
+  openReader(cx) {
+    const { pane } = location();
+    if (!pane) { this.note_ = "Focus a terminal first: the reader pane opens beside it"; cx.notify(); return; }
+    this.follow();
+    run("pane.split", { direction: "right", pane, mod: "commit-review", props: { reader: true } });
+    cx.notify();
   }
 
   // The store folder changes whenever anyone writes a thread: reload the
@@ -278,12 +345,13 @@ export default class Review extends View {
     cx.notify();
   }
 
-  // New threads, and a toast for each comment an agent submitted since the last load.
+  // New threads, and a toast for each comment an agent submitted since the
+  // last load. The reader leaves the toasts to the panel, so each shows once.
   setThreads(threads) {
     const ids = new Set(), fresh = [];
     for (const t of threads) for (const c of t.comments) {
       ids.add(c.id);
-      if (this.seen && !this.seen.has(c.id) && c.role === "agent" && !c.pending) fresh.push({ t, c });
+      if (this.seen && !this.reader && !this.seen.has(c.id) && c.role === "agent" && !c.pending) fresh.push({ t, c });
     }
     this.seen = ids;
     for (const { t, c } of fresh.slice(0, 3)) {
@@ -304,7 +372,7 @@ export default class Review extends View {
     let lines;
     try { lines = await diffOf(this.git, found.unit.from, found.unit.to, found.file); }
     catch (e) { lines = [`Cannot show this diff: ${e?.message ?? e}`]; }
-    if (key() === context && this.open === open) this.setLines(lines, found.file.path);
+    if (this.contextKey() === context && this.open === open) this.setLines(lines, found.file.path);
   }
 
   setLines(lines, path) {
@@ -328,14 +396,15 @@ export default class Review extends View {
 
   at(d) { return d ? (this.index.get(descKey(d)) ?? -1) : -1; }
 
-  // The threads shown with a file of a unit. A branch also shows the threads
-  // written on its commits, placed where their lines still are.
+  // The threads shown with a file of a unit, by its `match`. A branch also
+  // shows the threads written on its commits, placed where their lines still are.
   threadsOn(unit, path) {
+    const m = unit.match;
     return this.threads.filter((t) => {
       if (t.path !== path) return false;
       const target = t.target;
-      if (unit.target.kind === "commit") return target.kind === "commit" && target.commit === unit.target.commit;
-      return (target.kind === "branch" && target.branch === unit.target.branch) || (target.kind === "commit" && this.commitSet.has(target.commit));
+      if (target.kind === "commit") return m.commits.includes(target.commit);
+      return target.kind === "branch" && m.branch !== undefined && target.branch === m.branch;
     });
   }
 
@@ -508,6 +577,7 @@ export default class Review extends View {
     this.open = { unit: unitKey, path }; this.closed = false; this.note_ = null; this.setLines([]);
     if (this.composer && this.composer.kind !== "thread") this.closeComposer();
     this.rebuild();
+    this.follow();
     const context = this.context;
     cx.spawn(async (cx) => { await this.loadDiff(context); this.rebuild(); cx.notify(); });
     cx.notify();
@@ -515,7 +585,7 @@ export default class Review extends View {
 
   pick(unitKey, path, cx) {
     if (this.open?.unit === unitKey && this.open?.path === path) {
-      this.open = null; this.closed = true; this.setLines([]); this.rebuild(); cx.notify();
+      this.open = null; this.closed = true; this.setLines([]); this.rebuild(); this.follow(); cx.notify();
     } else this.show(unitKey, path, cx);
   }
 
@@ -532,6 +602,7 @@ export default class Review extends View {
     this.open = null; this.closed = false; this.setLines([]); this.units = [];
     if (this.composer?.kind !== "thread") this.closeComposer();
     this.rebuild();
+    this.follow();
     this.refresh(cx); cx.notify();
   }
 
@@ -706,12 +777,11 @@ export default class Review extends View {
     const parts = f.path.split("/"), name = parts.pop(), state = this.viewState(unit, f);
     const open = this.open?.unit === unit.key && this.open?.path === f.path, id = `${unit.key}-${f.path}`;
     const threads = this.threadsOn(unit, f.path), openCount = threads.filter((th) => th.status === "open").length;
-    const color = f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : t.blocked;
     return h_flex().id(`file-${id}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(open, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => this.pick(unit.key, f.path, cx))
       .child(div().id(`viewed-${id}`).flex_none().tooltip(state === "yes" ? "Viewed · click to unmark" : state === "changed" ? "Changed since you viewed it · click to mark it viewed again" : "Mark as viewed")
         .on_click((_e, cx) => { cx.stop_propagation(); this.toggleViewed(unit, f, cx); }).child(this.tick(state === "yes", t, state === "changed")))
-      .child(div().w(12).flex_none().text_size(11).text_color(color).child(f.status))
+      .child(div().w(12).flex_none().text_size(11).text_color(statusColor(f, t)).child(f.status))
       .child(h_flex().flex_1().min_w(0).when(state === "yes", (e) => e.opacity(0.5))
         .child(div().text_color(t.dim).truncate().child(parts.length ? `${parts.join("/")}/` : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
       .when(state === "changed", (e) => e.child(div().flex_none().text_size(10).text_color(t.blocked).child("changed")))
@@ -848,35 +918,77 @@ export default class Review extends View {
       .child(pill(COMMITTED, "Committed", "A branch or chosen commits, reviewed in threads that agents answer"));
   }
 
+  // The reader pane's header: the open file and what it is a diff of.
+  readerHeader(t) {
+    const found = this.fileOf(this.open);
+    const bar = h_flex().h(32).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12);
+    if (!found) return bar.child(div().font_semibold().child("Review"));
+    const { unit, file } = found, parts = file.path.split("/"), name = parts.pop();
+    return bar
+      .child(div().w(12).flex_none().text_size(11).text_color(statusColor(file, t)).child(file.status))
+      .child(h_flex().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? `${parts.join("/")}/` : "")).child(div().flex_none().font_medium().child(name)))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(unit.label))
+      .when(file.add > 0, (e) => e.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${file.add}`)))
+      .when(file.del > 0, (e) => e.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${file.del}`)));
+  }
+
+  // The diff with its thread cards and the comment card. `empty`: the text
+  // shown while no file is open.
+  diffArea(t, colors, target, empty) {
+    // The rows under a thread keep a faint mark in their margin.
+    const marked = new Set();
+    for (const it of this.items) if (it.at) for (let j = it.at.from; j <= it.at.to; j++) marked.add(j);
+    return h_flex().flex_1().min_h(0).items_stretch()
+      .child(div().flex_1().min_w(0).min_h(0).relative().font_family(codeFont()).text_size(this.fontSize)
+        .child(div().id("review-diff-x").size_full().overflow_x_scrollbar()
+          .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("review-diff", this.items.length, this.sizes.length ? this.sizes : this.row, (i) => this.items[i].key,
+            (range) => this.items.slice(range.start, range.end).map((it) => this.item(it, t, colors, target, marked))).size_full().track_scroll(this.scroll)
+            .on_item_click((k, cx) => { if (k.startsWith("t:")) this.openThread(k.slice(2), cx); else this.clickRow(Number(k.slice(2)), cx); }))))
+        .child(Scrollbar.vertical("review-diff").viewport_from_layout().absolute().inset_0())
+        .when(!this.open && Boolean(empty), (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child(empty)))
+        .when(Boolean(this.open) && this.rows.length > 0 && !this.composer, (e) => e.child(div().absolute().bottom(6).right(14).px(8).py(3).rounded(6).bg(t.raised + "e0").text_size(10).text_color(t.dim).child("Click a line to comment · click a thread to answer it"))))
+      .when(Boolean(this.composer) && !this.narrow(), (e) => e.child(this.composerCard(t, target, false)));
+  }
+
   render(cx) {
     if (this.dialog) return this.dialog.render(cx);
     if (this.strip) return this.renderSwitch();
-    if (key() !== this.context) this.refresh(cx);
+    if (this.reader) {
+      // The panel shared another file, or the same one changed: load it.
+      const at = shared(FOLLOW)?.at ?? null;
+      if (at !== this.followAt) { this.followAt = at; cx.timer.after(1, (cx) => this.refresh(cx)); }
+    } else if (key() !== this.context) this.refresh(cx);
     const size = codeSize();
     if (size !== this.fontSize) { this.fontSize = size; this.row = rowOf(size); this.measure(); }
     // Git Graph asked for a commit: the next load shows it.
-    const request = shared(REQUEST);
+    const request = this.reader ? null : shared(REQUEST);
     if (request && request.at !== this.requestAt) { this.requestAt = request.at; this.gen++; cx.timer.after(1, (cx) => this.refresh(cx)); }
     // The send dialog reports a sent text through `SENT`: the sent comments are submitted.
     const sentAt = shared(SENT);
     if (this.sending && typeof sentAt === "number" && sentAt >= this.sending.at) { const sending = this.sending; this.sending = null; cx.timer.after(1, (cx) => this.published(sending, cx)); }
 
     const t = theme(), colors = palette(t), target = this.target();
-    const files = this.units.flatMap((u) => u.files.map((f) => ({ u, f })));
-    const viewedCount = files.filter(({ u, f }) => this.viewState(u, f) === "yes").length;
-    const add = files.reduce((n, { f }) => n + f.add, 0), del = files.reduce((n, { f }) => n + f.del, 0);
-    const pending = this.threads.reduce((n, th) => n + th.comments.filter((c) => c.pending).length, 0);
-    // The rows under a thread keep a faint mark in their margin.
-    const marked = new Set();
-    for (const it of this.items) if (it.at) for (let j = it.at.from; j <= it.at.to; j++) marked.add(j);
-    const button = (id, label, primary, action, tip) => div().id(id).h(24).px(10).flex().items_center().rounded(6).bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground).text_size(12).font_medium().cursor_pointer().hover((s) => s.opacity(0.88)).on_click(action).tooltip(tip).child(label);
-    const problem = this.storeError ?? this.note_;
-    return v_flex().id("commit-review").size_full().min_h(0).relative().rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
+    const problem = this.error ?? this.storeError ?? this.note_;
+    const root = v_flex().id("commit-review").size_full().min_h(0).relative().rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_size_change((size, cx) => { const w = this.size?.width; this.size = size; if (w !== size.width) { this.rebuild(); cx.notify(); } })
       .on_key_down((e, cx) => {
         if (e.key === "escape" && this.composer) { this.closeComposer(cx); cx.stop_propagation(); }
         else if (e.key === "enter" && (e.modifiers?.platform || e.modifiers?.control) && this.composer) { this.saveComposer(cx); cx.stop_propagation(); }
-      })
+      });
+    if (this.reader) {
+      return root.child(this.readerHeader(t))
+        .when(Boolean(problem), (e) => e.child(div().px(12).py(5).text_size(11).text_color(t.ansi1).whitespace_normal().child(problem)))
+        .child(this.diffArea(t, colors, target, "Pick a file in the review panel to read it here"))
+        .when(Boolean(this.composer) && this.narrow(), (e) => e.child(this.composerCard(t, target, true)));
+    }
+
+    const files = this.units.flatMap((u) => u.files.map((f) => ({ u, f })));
+    const viewedCount = files.filter(({ u, f }) => this.viewState(u, f) === "yes").length;
+    const add = files.reduce((n, { f }) => n + f.add, 0), del = files.reduce((n, { f }) => n + f.del, 0);
+    const pending = this.threads.reduce((n, th) => n + th.comments.filter((c) => c.pending).length, 0);
+    const button = (id, label, primary, action, tip) => div().id(id).h(24).px(10).flex().items_center().rounded(6).bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground).text_size(12).font_medium().cursor_pointer().hover((s) => s.opacity(0.88)).on_click(action).tooltip(tip).child(label);
+    const note = this.storeError ?? this.note_;
+    return root
       .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
         .when(!this.repo, (e) => e.child(div().font_semibold().child("Committed")))
         .when(Boolean(this.repo), (e) => e.child(this.modeSwitch(t)).child(this.branchPicker(t)))
@@ -886,20 +998,14 @@ export default class Review extends View {
         .child(div().id("viewed-count").text_color(files.length && viewedCount === files.length ? t.ansi2 : t.muted).tooltip("Files marked viewed · the next one: commit-review.next").child(`${viewedCount}/${files.length} viewed`))
         .child(div().text_color(t.ansi2).child(`+${add}`)).child(div().text_color(t.ansi1).child(`−${del}`))
         .child(div().flex_1())
+        .when(Boolean(this.open), (e) => e.child(div().id("open-reader").size(22).flex().items_center().justify_center().rounded(5).cursor_pointer().text_color(t.muted)
+          .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Read this diff in a pane beside the terminal")
+          .on_click((_e, cx) => this.openReader(cx)).child(svg(`${ICONS}/panel-right.svg`).size(13))))
         .when(pending > 0, (e) => e.child(button("review-submit", `Submit review · ${pending}`, true, (_e, cx) => this.submit(cx), "Send your pending comments to an agent; they become visible to agents once sent")))))
       .when(Boolean(this.repo), (e) => e.child(this.commitStrip(t)))
       .child(this.fileList(t))
-      .when(Boolean(problem), (e) => e.child(div().px(12).py(5).text_size(11).text_color(t.ansi1).whitespace_normal().child(problem)))
-      .child(h_flex().flex_1().min_h(0).items_stretch()
-        .child(div().flex_1().min_w(0).min_h(0).relative().font_family(codeFont()).text_size(this.fontSize)
-          .child(div().id("review-diff-x").size_full().overflow_x_scrollbar()
-            .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("review-diff", this.items.length, this.sizes.length ? this.sizes : this.row, (i) => this.items[i].key,
-              (range) => this.items.slice(range.start, range.end).map((it) => this.item(it, t, colors, target, marked))).size_full().track_scroll(this.scroll)
-              .on_item_click((k, cx) => { if (k.startsWith("t:")) this.openThread(k.slice(2), cx); else this.clickRow(Number(k.slice(2)), cx); }))))
-          .child(Scrollbar.vertical("review-diff").viewport_from_layout().absolute().inset_0())
-          .when(!this.open && files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to review it")))
-          .when(Boolean(this.open) && this.rows.length > 0 && !this.composer, (e) => e.child(div().absolute().bottom(6).right(14).px(8).py(3).rounded(6).bg(t.raised + "e0").text_size(10).text_color(t.dim).child("Click a line to comment · click a thread to answer it"))))
-        .when(Boolean(this.composer) && !this.narrow(), (e) => e.child(this.composerCard(t, target, false))))
+      .when(Boolean(note), (e) => e.child(div().px(12).py(5).text_size(11).text_color(t.ansi1).whitespace_normal().child(note)))
+      .child(this.diffArea(t, colors, target, files.length > 0 ? "Select a file to review it" : null))
       .when(Boolean(this.composer) && this.narrow(), (e) => e.child(this.composerCard(t, target, true)));
   }
 }
