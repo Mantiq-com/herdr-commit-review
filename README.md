@@ -12,8 +12,9 @@ review comments of their own, all with one small command.
 - **Branch, commits or uncommitted.** Branch mode shows everything a branch
   adds since it left its base branch (from the merge base to the tip). Commits
   mode lists the branch's commits; tick one or several (shift-click for a range)
-  and each is shown as its own diff, under the commit's full message. A branch
-  filter picks which branch.
+  and each is shown as its own diff, under the commit's full message; with no
+  file open, the selected commits' messages show on their own. A branch filter
+  picks which branch.
   Uncommitted mode shows the working tree against HEAD, new files included. Its
   threads belong to that worktree, and still show in Branch mode once the work
   is committed.

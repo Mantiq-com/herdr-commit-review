@@ -150,6 +150,7 @@ export default class Review extends View {
     this.note.on("change", (_e, cx) => { this.noteText = this.note.value(); cx.notify(); });
     this.noteText = "";
     this.gen = 0;
+    this.picked = null;
     this.reset();
     this.refresh(cx);
     cx.timer.every(10000, (cx) => this.refresh(cx));
@@ -275,10 +276,13 @@ export default class Review extends View {
     if (asked) { this.remember(); this.open = null; this.closed = false; }
     if (store) this.watchStore(store, cx);
     if (this.open && !this.fileOf(this.open)) { this.open = null; this.setLines([]); }
+    // A commit just picked opens on its first file, so its message shows at
+    // once; otherwise the first unit's first file opens.
     if (!this.open && !this.closed) {
-      const u = units.find((u) => u.files.length);
+      const u = units.find((u) => u.key === this.picked && u.files.length) ?? units.find((u) => u.files.length);
       if (u) this.open = { unit: u.key, path: u.files[0].path };
     }
+    this.picked = null;
     if (this.open) await this.loadDiff(context);
     else this.setLines([]);
     this.rebuild();
@@ -286,9 +290,10 @@ export default class Review extends View {
   }
 
   // The reader pane's load: the file the panel has open (FOLLOW), its threads
-  // and its diff. Another file closes a new comment; a thread stays open.
+  // and its diff, else the selected commits' messages. Another file closes a
+  // new comment; a thread stays open.
   async loadReader(follow, context, cx) {
-    if (!follow?.path) { this.reset(); return; }
+    if (!follow?.path) { this.reset(); this.units = follow?.units ?? []; this.rebuild(); return; }
     const { repo, unit, path } = follow;
     if (this.repo?.id !== repo.id) this.reset();
     const open = this.open?.unit === unit.key && this.open?.path === path ? this.open : { unit: unit.key, path };
@@ -305,8 +310,9 @@ export default class Review extends View {
     this.rebuild();
   }
 
-  // Shares the open file, and what loading it takes, with the reader pane.
-  // Only a change is shared: setShared redraws every mod.
+  // Shares the open file, and what loading it takes, with the reader pane;
+  // with no file open, the selected commits' messages. Only a change is
+  // shared: setShared redraws every mod.
   follow() {
     if (this.reader) return;
     const found = this.repo && this.fileOf(this.open);
@@ -314,7 +320,7 @@ export default class Review extends View {
       repo: { root: this.repo.root, on: this.on, id: this.repo.id },
       unit: { key: found.unit.key, target: found.unit.target, from: found.unit.from, to: found.unit.to, label: found.unit.label, match: found.unit.match, message: found.unit.message, files: [found.file] },
       path: found.file.path,
-    } : { path: null };
+    } : { path: null, units: this.units.filter((u) => u.message).map((u) => ({ key: u.key, message: u.message, files: [] })) };
     const text = JSON.stringify(value);
     if (text === this.followed) return;
     this.followed = text;
@@ -432,12 +438,17 @@ export default class Review extends View {
 
   // The list's items: a commit's message, the threads that have no place in
   // the diff, then the diff rows, each placed thread under its last line.
+  // With no file open, the message of every selected commit.
   rebuild() {
     this.items = [];
     const found = this.fileOf(this.open);
-    if (!found) { this.sizes = []; return; }
-    const message = found.unit.message, key = found.unit.key;
-    if (message) this.items.push({ key: `m:${key}`, kind: "message", unit: key, message, height: this.messageHeight(message, this.expanded.has(key)) });
+    const messageOf = (u) => ({ key: `m:${u.key}`, kind: "message", unit: u.key, message: u.message, height: this.messageHeight(u.message, this.expanded.has(u.key)) });
+    if (!found) {
+      this.items = this.units.filter((u) => u.message).map(messageOf);
+      this.sizes = this.items.map((it) => it.height);
+      return;
+    }
+    if (found.unit.message) this.items.push(messageOf(found.unit));
     const under = new Map(), top = [];
     for (const t of this.threadsOn(found.unit, found.file.path)) {
       const at = place(t, this.rows), unplaced = !at && t.line !== null && t.line !== undefined;
@@ -694,13 +705,14 @@ export default class Review extends View {
     } else if (selected.has(sha)) selected.delete(sha);
     else selected.add(sha);
     this.lastClicked = sha;
+    this.picked = selected.has(sha) ? sha : null;
     this.selected = [...selected];
     this.changed(cx);
   }
 
   // A commit clicked in Branch mode's list: review that commit alone.
   reviewOnly(sha, cx) {
-    this.mode = "commits"; this.selected = [sha]; this.lastClicked = sha;
+    this.mode = "commits"; this.selected = [sha]; this.lastClicked = sha; this.picked = sha;
     this.changed(cx);
   }
 
@@ -1039,7 +1051,7 @@ export default class Review extends View {
               else this.clickRow(Number(k.slice(2)), cx);
             }))))
         .child(Scrollbar.vertical("review-diff").viewport_from_layout().absolute().inset_0())
-        .when(!this.open && Boolean(empty), (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child(empty)))
+        .when(!this.open && !this.items.length && Boolean(empty), (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child(empty)))
         .when(Boolean(this.open) && this.rows.length > 0 && !this.composer, (e) => e.child(div().absolute().bottom(6).right(14).px(8).py(3).rounded(6).bg(t.raised + "e0").text_size(10).text_color(t.dim).child("Click a line to comment · click a thread to answer it"))))
       .when(Boolean(this.composer) && !this.narrow(), (e) => e.child(this.composerCard(t, target, false)));
   }

@@ -51,7 +51,8 @@ Top to bottom, in one rounded card on the theme's `background`:
    accent mark in their left border. In Commits mode the list starts with the
    commit's message card, built like a thread card: a header ("commit 3f2a1c9 ·
    author · age") and the whole message, subject and body, cut to eight wrapped
-   lines with "N more lines · click to show all" when it is longer.
+   lines with "N more lines · click to show all" when it is longer. With no
+   file open, the list holds the message card of every selected commit.
 6. **Comment card**, 340px, floating over the top right of the diff (a strip
    under it when the panel is narrower than 600px): a new comment's box, or a
    whole thread with its lines, every comment, a reply box and Resolve / Reopen
@@ -64,8 +65,9 @@ With `props.switch` the mod draws only a 32px strip with two pills,
 the send dialog. With `props.reader` it is the reader pane: a 32px header (the
 status letter, the folder dimmed and the file name, what it is a diff of, and
 the line counts), then the diff, thread cards and comment card as in the panel,
-for the file the panel has open; "Pick a file in the review panel to read it
-here" while there is none.
+for the file the panel has open. With no file open it shows the selected
+commits' messages, and "Pick a file in the review panel to read it here" when
+there are none.
 
 ## How it behaves
 
@@ -82,6 +84,10 @@ here" while there is none.
 - A click on a long commit message shows all of it, and another cuts it again;
   the choice holds for that commit's other files.
 - Ticking Viewed on the open file opens the next file not viewed yet.
+- Picking a commit (its tick box in Commits mode, or a row of Branch mode's
+  list) opens that commit's first file, so its message shows at once, in the
+  panel and the reader, even when other commits are selected. Closing the open
+  file leaves the selected commits' messages in its place, in both.
 - A tick stores the file's blobs before and after; the file reads "changed"
   once they differ. A branch's ticks are kept per branch, a commit's under its
   identity: its author's email, the author time and the subject, which amend
@@ -166,7 +172,8 @@ here" while there is none.
   makes a card appear under that line, with a notification.
 - In Commits mode a commit's file opens under the commit's whole message; a
   message longer than eight lines shows all of them after a click, in the panel
-  and in the reader.
+  and in the reader. Picking another commit while one is selected shows the
+  picked commit's message, and closing the file shows every selected commit's.
 - In Commits mode, ticking some of a commit's files shows "k/n" on its row, and
   all of them a check. After `git commit --amend` changes a viewed file, the
   row reads "changed", the other files stay viewed, and the commit's threads
