@@ -918,7 +918,7 @@ export default class Review extends View {
         .when(hidden > 0, (e) => e.child(div().h(SMALL_LINE).flex_none().text_size(10).text_color(t.dim).child(`${plural(hidden, "earlier comment")}`)))
         .children(shown.map((c) => v_flex().flex_none()
           .child(div().h(SMALL_LINE).truncate().text_size(10).text_color(c.role === "agent" ? t.accent : t.muted).child(who(c)))
-          .child(div().text_size(this.fontSize).whitespace_normal().text_color(t.foreground).child(clip(c.text, cpl, CARD_LINES).text)))));
+          .child(div().text_size(this.fontSize).line_height(`${this.lineHeight()}px`).whitespace_normal().text_color(t.foreground).child(clip(c.text, cpl, CARD_LINES).text)))));
   }
 
   // The commit's whole message above its diff, cut to MESSAGE_LINES until clicked.
@@ -929,7 +929,7 @@ export default class Review extends View {
     return div().w_full().h(it.height).flex_none().pl(42).pr(12).py(4).when(long, (e) => e.cursor_pointer())
       .child(v_flex().max_w((this.size?.width ?? 368) - 60).h_full().overflow_hidden().rounded(8).border_1().border_color(t.border).px(10).py(6).gap(CARD_GAP).bg(t.surface)
         .child(div().h(SMALL_LINE).flex_none().truncate().text_size(10).text_color(t.dim).child(`commit ${m.short} · ${m.author} · ${ago(m.time)}${hint}`))
-        .child(div().text_size(this.fontSize).whitespace_normal().text_color(t.foreground).child(clip(m.text, cpl, open ? Infinity : MESSAGE_LINES).text)));
+        .child(div().text_size(this.fontSize).line_height(`${this.lineHeight()}px`).whitespace_normal().text_color(t.foreground).child(clip(m.text, cpl, open ? Infinity : MESSAGE_LINES).text)));
   }
 
   item(it, t, colors, target, marked) {

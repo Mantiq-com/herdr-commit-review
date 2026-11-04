@@ -144,7 +144,8 @@ there are none.
   through the list's `on_item_click`, and the comment card floats outside it.
 - Card heights are computed before drawing (comments cut to five wrapped lines,
   the last three comments; a commit message cut to eight until clicked): keep
-  that estimate and the drawing in step.
+  that estimate and the drawing in step. The card text is drawn with the line
+  height the estimate counts (`lineHeight()`), not GPUI's taller default.
 - A thread is placed where its first quoted line still is, nearest its line
   number; when that text is gone it is listed at the top as "not in this diff"
   instead of being guessed onto other code.
